@@ -1,0 +1,1 @@
+cmd_/home/pierpaolospaziani/Desktop/code/syscall-table/the_usctm.o := ld  -m elf_x86_64 -z noexecstack     -r -o /home/pierpaolospaziani/Desktop/code/syscall-table/the_usctm.o /home/pierpaolospaziani/Desktop/code/syscall-table/usctm.o /home/pierpaolospaziani/Desktop/code/syscall-table/lib/vtpmo.o

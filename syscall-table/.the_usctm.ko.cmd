@@ -1,0 +1,1 @@
+cmd_/home/pierpaolospaziani/Desktop/code/syscall-table/the_usctm.ko := ld -r  -m elf_x86_64 -z noexecstack   --build-id=sha1  -T scripts/module.lds -o /home/pierpaolospaziani/Desktop/code/syscall-table/the_usctm.ko /home/pierpaolospaziani/Desktop/code/syscall-table/the_usctm.o /home/pierpaolospaziani/Desktop/code/syscall-table/the_usctm.mod.o;  true

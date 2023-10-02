@@ -1,0 +1,1 @@
+cmd_/home/pierpaolospaziani/Desktop/code/syscall-table/Module.symvers := sed 's/\.ko$$/\.o/' /home/pierpaolospaziani/Desktop/code/syscall-table/modules.order | scripts/mod/modpost -m -a  -o /home/pierpaolospaziani/Desktop/code/syscall-table/Module.symvers -e -i Module.symvers   -T -
