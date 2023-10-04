@@ -7,7 +7,7 @@
 #include "../common_header.h"
 
 
-#define MOD_NAME "SINGLE FILE FS"
+#define MOD_NAME "SINGLE_FILE_FS"
 
 #define MAGIC 0x42424242
 #define SB_BLOCK_NUMBER 0

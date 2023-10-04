@@ -12,79 +12,105 @@
 #include "../utils_header.h"
 
 
-// DA CONTROLLARE !!!
 int onefilefs_open(struct inode *inode, struct file *file) {
     
-    printk("%s: il thread %d sta tentando di aprire file\n", MODNAME, current->pid);
+    printk("%s: onefilefs_open entry\n", MODNAME);
+
+    // incremento del contatore atomico degli utilizzi del file system
+    // atomic_fetch_add(1, &(au_info.usages));
     
-    // controlla se il filesystem è montato
+    // controllo se il device è montato
     if (bd_metadata.bdev == NULL) {
-        printk("%s: nessun device montato\n", MODNAME);
+        printk(KERN_CRIT "%s: No device mounted\n", MODNAME);
         return -ENODEV;
     }
 
-    // nega aperture del file in scrittura (filesystem in sola lettura)
+    // il device deve essere in read_only
     if (file->f_mode & FMODE_WRITE) {
-        printk("%s: apertura in modalità scrittura non consentita\n", MODNAME);
+        printk(KERN_CRIT "%s: Unable to open the device in write mode\n", MODNAME);
         return -EROFS;
     }
-
+    
+    // atomic_fetch_add(-1, &(au_info.usages));
+    
     return 0;
 }
 
 
 int onefilefs_release(struct inode *inode, struct file *file) {
-    printk("%s: il thread %d sta tentando di chiudere il file\n", MODNAME, current->pid);
+
+    printk("%s: onefilefs_open exit\n", MODNAME);
+    
+    // atomic_fetch_add(1, &(au_info.usages));
+
     if(bd_metadata.bdev == NULL){
-        printk("%s: nessun device montato\n", MODNAME);
+        printk(KERN_CRIT "%s: No device mounted\n", MODNAME);
         return -ENODEV;
     }
+
+    // atomic_fetch_add(-1, &(au_info.usages));
+
     return 0;
 }
 
 
 ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t * off) {
 
+    int blockIndex, ret, length, offset=0;
+    // unsigned long my_epoch;
     struct buffer_head *bh = NULL;
-    struct inode * the_inode = filp->f_inode;
-    uint64_t file_size = the_inode->i_size;
-    int ret;
-    loff_t offset;
-    int block_to_read;      // index of the block to be read from device
-
-    printk("%s: read operation called with len %ld - and offset %lld (the current file size is %lld)",MOD_NAME, len, *off, file_size);
-
-    // this operation is not synchronized 
-    // *off can be changed concurrently 
-    // add synchronization if you need it for any reason
-
-    // check that *off is within boundaries
-    if (*off >= file_size)
-        return 0;
-    else if (*off + len > file_size)
-        len = file_size - *off;
-
-    // determine the block level offset for the operation
-    offset = *off % DEFAULT_BLOCK_SIZE; 
-    // just read stuff in a single block - residuals will be managed at the applicatin level
-    if (offset + len > DEFAULT_BLOCK_SIZE)
-        len = DEFAULT_BLOCK_SIZE - offset;
-
-    // compute the actual index of the the block to be read from device
-    block_to_read = *off / DEFAULT_BLOCK_SIZE + 2;          // the value 2 accounts for superblock and file-inode on device
+    struct Block *block;
     
-    printk("%s: read operation must access block %d of the device",MOD_NAME, block_to_read);
+    printk("%s: onefilefs_read entry\n", MODNAME);
 
-    bh = (struct buffer_head *)sb_bread(filp->f_path.dentry->d_inode->i_sb, block_to_read);
-    if(!bh){
-	return -EIO;
+    // segnala la presenza di un reader sulla variabile bdev
+    __sync_fetch_and_add(&(bd_metadata.usage),1);
+
+
+    if (bd_metadata.bdev == NULL) {
+        printk(KERN_CRIT "%s: nessun device montato\n", MODNAME);
+        __sync_fetch_and_sub(&(bd_metadata.usage),1);
+        // wake_up_interruptible(&unmount_wq);
+        return -ENODEV;
     }
-    ret = copy_to_user(buf,bh->b_data + offset, len);
-    *off += (len - ret);
-    brelse(bh);
 
-    return len - ret;
+    // segnala la presenza del reader
+    // my_epoch = __sync_fetch_and_add(&(rcu.epoch),1);
 
+    // leggi i blocchi validi
+    for (blockIndex = 2; blockIndex < NBLOCKS; blockIndex++){
+        bh = (struct buffer_head *) sb_bread(bd_metadata.bdev->bd_super, blockIndex);
+        if (!bh) {
+            ret = -EIO;
+            goto read_exit;
+        }
+        if (bh->b_data != NULL) {
+            block = (struct Block *) bh->b_data;
+            if (block->isValid){
+                length = strlen(block->data);
+                printk("%s: Read from block %u: %s\n", MODNAME, blockIndex, block->data);
+                ret = copy_to_user(buf, strcat(block->data, "\n"), length+1);
+                if (ret != 0){
+                    printk(KERN_CRIT "%s: Unable to copy %d bytes from the block n.%d\n", MODNAME, ret, blockIndex);
+                    ret = -EIO;
+                    goto read_exit;
+                }
+                offset += length+1;
+                printk("%s: %d bytes copied\n", MODNAME, length+1-ret);
+            }
+        }
+        brelse(bh);
+    }
+    ret = offset;
+
+read_exit:
+    // index = (my_epoch & MASK) ? 1 : 0;
+    // __sync_fetch_and_add(&(rcu.standing[index]),1);
+    // wake_up_interruptible(&readers_wq);
+    __sync_fetch_and_sub(&(bd_metadata.usage),1);
+    // wake_up_interruptible(&unmount_wq);
+
+    return ret;
 }
 
 

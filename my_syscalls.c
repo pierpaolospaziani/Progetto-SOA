@@ -127,12 +127,12 @@ asmlinkage int sys_put_data(char* source, size_t size) {
 
     // forza la scrittura in modo sincrono sul device
     // se non si vuole utilizzare il page-cache write back daemon, la scrittura del blocco viene riportata nel device in maniera sincrona.
-#ifdef SYNC_WRITE_BACK 
-    if(sync_dirty_buffer(bh) == 0) {
-        printk("%s: scrittura sincrona avvenuta con successo", MODNAME);
-    } else
-        printk(KERN_CRIT "%s: scrittura sincrona fallita", MODNAME);
-#endif
+// #ifdef SYNC_WRITE_BACK 
+//     if(sync_dirty_buffer(bh) == 0) {
+//         printk("%s: scrittura sincrona avvenuta con successo", MODNAME);
+//     } else
+//         printk(KERN_CRIT "%s: scrittura sincrona fallita", MODNAME);
+// #endif
 
     brelse(bh);
     ret = invalidBlockIndex;
@@ -295,19 +295,20 @@ asmlinkage int sys_invalidate_data(int offset) {
         mark_buffer_dirty(bh);
         ret = updateSuperblockInvalidEntry(offset+2);
         if (ret < 0) {
-            printk(KERN_CRIT "%s: problemi con l'agggiornamento del superblocco\n", MODNAME);
+            printk(KERN_CRIT "%s: problemi con l'aggiornamento del superblocco\n", MODNAME);
             ret = -ENODEV;
             goto inv_exit;
         }
     }
 
     // forza la scrittura in modo sincrono sul device
-#ifdef SYNC_WRITE_BACK 
-    if(sync_dirty_buffer(bh) == 0) {
-        printk("%s: scrittura sincrona avvenuta con successo", MODNAME);
-    } else
-        printk(KERN_CRIT "%s: scrittura sincrona fallita", MODNAME);
-#endif
+// #ifdef SYNC_WRITE_BACK 
+//     if(sync_dirty_buffer(bh) == 0) {
+//         printk("%s: scrittura sincrona avvenuta con successo", MODNAME);
+//     } else
+//         printk(KERN_CRIT "%s: scrittura sincrona fallita", MODNAME);
+// #endif
+
     brelse(bh);
 
 inv_exit:
