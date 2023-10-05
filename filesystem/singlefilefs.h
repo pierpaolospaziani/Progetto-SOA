@@ -61,18 +61,10 @@ struct onefilefs_sb_info {
 	char padding[ (4 * 1024) - (7 * sizeof(uint64_t))];
 };
 
-
-// block metadata definition
-struct block_device_metadata {
-    unsigned int usage;
-    struct block_device *bdev;
-};
-
 // filesystem metadata definition
 struct filesystem_metadata {
     bool isMounted;
     unsigned int currentlyInUse;
-    char deviceName[20];
 };
 
 // block definition
@@ -84,7 +76,8 @@ struct Block {
     char data[DEFAULT_BLOCK_SIZE - METADATA_SIZE];
 };
 
-extern struct block_device_metadata bd_metadata;
+extern struct filesystem_metadata fs_metadata;
+extern struct super_block *superblock;
 
 
 // file.c

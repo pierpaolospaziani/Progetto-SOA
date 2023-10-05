@@ -11,13 +11,13 @@ int isValidBlock(int);
 int getInvalidBlockIndex(void);
 int updateSuperblockInvalidEntry(int);
 
-// controlla se un blocco all'interno del dispositivo è valido
+// checks if a block inside the device is valid
 int isValidBlock(int blockNumber) {
 
     struct buffer_head *bh;
     struct Block *block;
 
-    bh = sb_bread(bd_metadata.bdev->bd_super, blockNumber);
+    bh = sb_bread(superblock, blockNumber);
     if (!bh) {
         return -1;
     }
@@ -28,44 +28,46 @@ int isValidBlock(int blockNumber) {
     return block->isValid;
 }
 
-// ottiene l'indice del primo blocco invalido
+// gets the index of the first invalid block
 int getInvalidBlockIndex() {
 
     struct buffer_head *bh;
-    struct onefilefs_sb_info *superblock;
+    struct onefilefs_sb_info *superblockInfo;
 
-    bh = sb_bread(bd_metadata.bdev->bd_super, 0);
+    bh = sb_bread(superblock, 0);
     if (!bh) {
         return -1;
     }
 
-    superblock = (struct onefilefs_sb_info *)bh->b_data;
+    superblockInfo = (struct onefilefs_sb_info *)bh->b_data;
 
     brelse(bh);
-    return superblock->firstInvalidBlock;
+    return superblockInfo->firstInvalidBlock;
 }
 
-// aggiorna il valore di 'firstInvalidBlock' nel superblocco con il valore passato come parametro e ritorna il vecchio 'firstInvalidBlock'
+// update the value of 'firstInvalidBlock' in the superblock with the value passed as a parameter
+// returns the old 'firstInvalidBlock'
 int updateSuperblockInvalidEntry(int blockNumber) {
 
     struct buffer_head *bh;
-    struct onefilefs_sb_info *superblock;
+    struct onefilefs_sb_info *superblockInfo;
     int oldInvalidBlock;
 
-    bh = sb_bread(bd_metadata.bdev->bd_super, 0);
+    bh = sb_bread(superblock, 0);
     if (!bh) {
-        return -2;  // -1 non posso usarlo perchè viene utilizzato per indicare che è il primo della lista dei blocchi invalidi
+        return -2;  // -1 can't be used because it indicates that the block is the first in the list of invalid blocks
     }
 
-    superblock = (struct onefilefs_sb_info *)bh->b_data;
-    oldInvalidBlock = superblock->firstInvalidBlock;
-    superblock->firstInvalidBlock = blockNumber;
+    superblockInfo = (struct onefilefs_sb_info *)bh->b_data;
+    oldInvalidBlock = superblockInfo->firstInvalidBlock;
+    superblockInfo->firstInvalidBlock = blockNumber;
     mark_buffer_dirty(bh);
 
-    //se non si vuole utilizzare il page-cache write back daemon, la scrittura del blocco viene riportata nel device in maniera sincrona.
-    // #ifdef SYNC
-    // sync_dirty_buffer(bh);
-    // #endif
+    // if 'SYNCHRONUS_WRITE_BACK' is not defined, write operations will be executed by the page-cache write back daemon
+    #ifdef SYNCHRONUS_WRITE_BACK
+    if(sync_dirty_buffer(bh) != 0)
+        return -2;
+    #endif
 
     brelse(bh);
 

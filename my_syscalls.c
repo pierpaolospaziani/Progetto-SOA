@@ -44,106 +44,100 @@ asmlinkage int sys_put_data(char* source, size_t size) {
 
     struct buffer_head *bh = NULL;
     struct Block *newBlock;
-    struct block_device *bdev_temp;
 
-    printk("%s: sys_put_data() invocata\n", MODNAME);
+    printk("%s: sys_put_data() called ...\n", MODNAME);
 
     // sanity check
-    if (source == NULL || size >= DEFAULT_BLOCK_SIZE - METADATA_SIZE) return -EINVAL;
-    
-    // allocazione di memoria dinamica per contenere il messaggio utente
-    buffer = kmalloc(size+1, GFP_KERNEL);
-    if (!buffer) {
-        printk(KERN_CRIT "%s: errore kmalloc, impossibilità di allocare memoria per la ricezione del buffer utente\n", MODNAME);
-        return -ENOMEM;
+    if (source == NULL || size >= DEFAULT_BLOCK_SIZE - METADATA_SIZE){
+        ret = -EINVAL;
+        goto exit;
     }
 
-    // copia size bytes dal buffer utente al buffer kernel
-    ret = copy_from_user(buffer, source, size); // ret è il numero di byte NON copiati (su un massimo di size).
+    // increase the usage counter
+    __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
+    
+    // allocation of kernel buffer for the message
+    buffer = kmalloc(size+1, GFP_KERNEL);
+    if (!buffer) {
+        printk(KERN_CRIT "%s: buffer kmalloc error\n", MODNAME);
+        ret = -ENOMEM;
+        goto exit;
+    }
+
+    // copies the user buffer into the kernel buffer
+    ret = copy_from_user(buffer, source, size);
     len = strlen(buffer);
     if (strlen(buffer) < size)
         size = len;
     buffer[size] = end_str;
-    printk("%s: il messaggio da inserire è: %s (len=%lu)\n", MODNAME, buffer, size);
 
-    // segnala la presenza del reader sulla variabile bdev (for the unmount check)
-    __sync_fetch_and_add(&(bd_metadata.usage),1);
-    bdev_temp = bd_metadata.bdev;
-    if (bdev_temp == NULL) {
-        printk(KERN_CRIT "%s: nessun device montato", MODNAME);
-        ret = -ENODEV;
-        goto put_exit;
-    }
-
-    // popola la struct block_device_layout da scrivere poi in buffer_head
+    // initializes the new block to be inserted
     newBlock = kmalloc(sizeof(struct Block), GFP_KERNEL);
     if (newBlock == NULL) {
-        printk(KERN_CRIT "%s: errore kmalloc, impossibilità di allocare memoria per newBlock\n", MODNAME);
-        // wake_up_interruptible(&unmount_wq);
-        kfree(buffer);
-        return -ENOMEM;
+        printk(KERN_CRIT "%s: newBlock kmalloc error\n", MODNAME);
+        ret = -ENOMEM;
+        goto exit;
     }
     newBlock->isValid = true;
     newBlock->nextInvalidBlock = -1;
-    memcpy(newBlock->data, buffer, size+1); // +1 per il terminatore di stringa
+    memcpy(newBlock->data, buffer, size+1);
 
-    // cerca un blocco sovrascrivibile
+    // searches for an overwritable block
     invalidBlockIndex = getInvalidBlockIndex();
     if (invalidBlockIndex == -1){
-        printk(KERN_CRIT "%s: nessun blocco disponibile per inserire il messaggio\n", MODNAME);
+        printk(KERN_CRIT "%s: no block available\n", MODNAME);
         ret = -ENOMEM;
-        goto put_exit;
+        goto exit;
     }
 
-    //attesa della fine del grace period
+    // attesa della fine del grace period
     // synchronize_srcu(&(au_info.srcu));
 
     // prendi il lock in scrittura per la concorrenza con invalidate_data
     // mutex_lock(&(rcu.write_lock));
         
-    // dati in cache
-    bh = (struct buffer_head *) sb_bread(bdev_temp->bd_super, invalidBlockIndex);
+    // gets the buffer_head
+    bh = sb_bread(superblock, invalidBlockIndex);
     if (!bh) {
-        printk(KERN_CRIT "%s: impossibile leggere il buffer_head, invalidBlockIndex = %d\n", MODNAME,invalidBlockIndex);
-        // sel_blk = set_invalid(0);
+        printk(KERN_CRIT "%s: buffer_head read error\n", MODNAME);
         ret = -EIO;
         // mutex_unlock(&(rcu.write_lock));    // <---
-        goto put_exit;
+        goto exit;
     }
 
-    // aggiorna 'firstInvalidBlock' con il valore di 'nextInvalidBlock' del blocco selezionato
+    // updates 'firstInvalidBlock' with the value of 'nextInvalidBlock' of the selected block
     ret = updateSuperblockInvalidEntry(((struct Block *) bh->b_data)->nextInvalidBlock);
-    if (ret < -1) {
-        printk(KERN_CRIT "%s: problemi con l'aggiornamento del superblocco: %d\n", MODNAME, ret);
-        ret = -ENODEV;
-        goto put_exit;
+    if (ret < -2) {
+        printk(KERN_CRIT "%s: an error occurred during the superblock update\n", MODNAME);
+        ret = -EIO;
+        goto exit;
     }
 
-    if (bh->b_data != NULL) {
-        memcpy(bh->b_data, (char *) newBlock, sizeof(struct Block));
-        mark_buffer_dirty(bh);
+    if (bh->b_data == NULL) {
+        printk(KERN_CRIT "%s: buffer_head data error\n", MODNAME);
+        ret = -EIO;
+        goto exit;
     }
 
-    // forza la scrittura in modo sincrono sul device
-    // se non si vuole utilizzare il page-cache write back daemon, la scrittura del blocco viene riportata nel device in maniera sincrona.
-// #ifdef SYNC_WRITE_BACK 
-//     if(sync_dirty_buffer(bh) == 0) {
-//         printk("%s: scrittura sincrona avvenuta con successo", MODNAME);
-//     } else
-//         printk(KERN_CRIT "%s: scrittura sincrona fallita", MODNAME);
-// #endif
+    // writing the data
+    memcpy(bh->b_data, (char *) newBlock, sizeof(struct Block));
+    mark_buffer_dirty(bh);
+
+    // if 'SYNCHRONUS_WRITE_BACK' is not defined, write operations will be executed by the page-cache write back daemon
+    #ifdef SYNCHRONUS_WRITE_BACK
+    if(sync_dirty_buffer(bh) == 0)
+        printk("%s: synchronous writing successful", MODNAME);
+    else
+        printk(KERN_CRIT "%s: synchronous writing failed", MODNAME);
+    #endif
 
     brelse(bh);
     ret = invalidBlockIndex;
 
-    // aggiunta del blocco appena scritto alla rcu_list per renderlo visibile
-    // list_insert(&head, i);    // <---
-    // printk("%s: blocco %d aggiunto alla lista dei messaggi validi\n", MODNAME, i);
-
     // mutex_unlock(&(rcu.write_lock));
 
-put_exit:
-    __sync_fetch_and_sub(&(bd_metadata.usage),1);
+exit:
+    __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
     // wake_up_interruptible(&unmount_wq);
     kfree(buffer);
     kfree(newBlock);
@@ -157,90 +151,96 @@ __SYSCALL_DEFINEx(3, _get_data, int, offset, char*, destination, size_t, size) {
 asmlinkage int sys_get_data(int offset, char* destination, size_t size) {
 #endif
 
-    int ret, len, return_val, blocksNumber;
+    int ret, blocksNumber;
     char end_str = '\0';
     // unsigned long my_epoch;
-    struct onefilefs_sb_info *superblock;
+    struct onefilefs_sb_info *superblockInfo;
     struct buffer_head *bh = NULL;
-    struct block_device *bdev_temp;
     struct Block *block;
 
-    printk("%s: get_data invocata", MODNAME);
+    printk("%s: get_data called ...", MODNAME);
 
-    bh = sb_bread(bd_metadata.bdev->bd_super, 0);
+    // increase the usage counter
+    __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
+
+    // retrieve the blocksNumber
+    bh = sb_bread(superblock, 0);
     if(!bh){
-        return -EIO;
+        printk(KERN_CRIT "%s: buffer_head read error\n", MODNAME);
+        ret = -EIO;
+        goto exit;
     }
-    superblock = (struct onefilefs_sb_info *)bh->b_data;
-    blocksNumber = superblock->blocksNumber;
+    superblockInfo = (struct onefilefs_sb_info *)bh->b_data;
+    blocksNumber = superblockInfo->blocksNumber;
     brelse(bh);
 
+    // sanity check
     if (offset < 0 || offset >= blocksNumber-2 || size < 0 || destination == NULL){
         printk(KERN_CRIT "%s: sys_get_data() error: invalid input!\n", MODNAME);
-        return -EINVAL;
+        ret = -EINVAL;
+        goto exit;
     }
-
     size = (size >= DEFAULT_BLOCK_SIZE - METADATA_SIZE) ? (DEFAULT_BLOCK_SIZE - METADATA_SIZE) : size;
-    
-    // segnala la presenza del reader sulla variabile bdev
-    __sync_fetch_and_add(&(bd_metadata.usage),1);
-    bdev_temp = bd_metadata.bdev;
-    if (bdev_temp == NULL) {
-        printk(KERN_CRIT "%s: No device mounted", MODNAME);
-        __sync_fetch_and_sub(&(bd_metadata.usage),1);
-        // wake_up_interruptible(&unmount_wq);
-        return -ENODEV;
-    }
 
     // segnala la presenza del reader per evitare che uno scrittore riutilizzi lo stesso blocco mentre lo si sta leggendo
     // my_epoch = __sync_fetch_and_add(&(rcu.epoch),1);
 
-    // dati in cache
-    bh = (struct buffer_head *) sb_bread(bdev_temp->bd_super, offset+2);
+    // gets the buffer_head
+    bh = (struct buffer_head *) sb_bread(superblock, offset+2);
     if (!bh) {
-        return_val = -EIO;
-        goto get_exit;
+        printk(KERN_CRIT "%s: buffer_head read error\n", MODNAME);
+        ret = -EIO;
+        goto exit;
     }
 
-    if (bh->b_data != NULL) {
-        printk("%s: [blocco %d]\n", MODNAME, offset+2);
-        block = (struct Block *) bh->b_data;
-        if (!block->isValid){
-            printk(KERN_CRIT "%s: il blocco %d richiesto non è valido\n", MODNAME, offset);
-            return_val = -ENODATA;
-            goto get_exit;
-        }
-
-        len = strlen(block->data);
-        if (size > len) { // richiesta una size maggiore del contenuto effettivo del blocco dati
-            size = len; 
-            ret = copy_to_user(destination, block->data, size);
-            return_val = size - ret;
-            ret = copy_to_user(destination+return_val, &end_str, 1);
-        } 
-        else { // richiesta una size minore o uguale del contenuto effettivo del blocco dati
-            ret = copy_to_user(destination, block->data, size);
-            return_val = size - ret;
-            ret = copy_to_user(destination+return_val, &end_str, 1);
-        }
-        if (strlen(block->data) < size) return_val = strlen(block->data);
-        printk("%s: bytes caricati nell'area di destinazione %d\n", MODNAME, return_val);
+    if (bh->b_data == NULL) {
+        printk(KERN_CRIT "%s: buffer_head data error\n", MODNAME);
+        ret = -EIO;
+        goto exit;
     }
-    else return_val = 0;
+
+    // check if the block is valid
+    block = (struct Block *) bh->b_data;
+    if (!block->isValid){
+        printk(KERN_CRIT "%s: the requested block is invalid\n", MODNAME);
+        ret = -ENODATA;
+        goto exit;
+    }
+
+    // if the requested size is too large, the complete message is returned
+    ret = strlen(block->data);
+    if (size > ret)
+        size = ret;
+
+    // copy the data to the destination buffer
+    ret = copy_to_user(destination, block->data, size);
+    if (ret != 0){
+        printk(KERN_CRIT "%s: copy_to_user error\n", MODNAME);
+        ret = -EIO;
+        goto exit;
+    }
+    ret = copy_to_user(destination+size, &end_str, 1);
+    if (ret != 0){
+        printk(KERN_CRIT "%s: copy_to_user error\n", MODNAME);
+        ret = -EIO;
+        goto exit;
+    }
+
+    ret = size+1;
+
+    printk("%s: %d bytes loaded\n", MODNAME, ret);
 
     brelse(bh);
 
-get_exit:
+exit:
     // // the first bit in my_epoch is the index where we must release the counter
     // index = (my_epoch & MASK) ? 1 : 0;
     // __sync_fetch_and_add(&(rcu.standing[index]),1);
-    __sync_fetch_and_sub(&(bd_metadata.usage),1);
+    __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
     // wake_up_interruptible(&readers_wq);
     // wake_up_interruptible(&unmount_wq);
 
-    return return_val; // the amount of bytes actually loaded into the destination area
-
-    return 0;
+    return ret;
 }
 
 
@@ -252,32 +252,26 @@ asmlinkage int sys_invalidate_data(int offset) {
 
     int ret = 0, blocksNumber;
     
-    struct onefilefs_sb_info *superblock;
+    struct onefilefs_sb_info *superblockInfo;
     struct buffer_head *bh;
     struct Block *block;
-    struct block_device *bdev_temp;
 
-    printk("%s: invalidate_data invocata\n", MODNAME);
+    printk("%s: invalidate_data called ...\n", MODNAME);
 
-    bh = sb_bread(bd_metadata.bdev->bd_super, 0);
+    // increase the usage counter
+    __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
+
+    // retrieve the blocksNumber
+    bh = sb_bread(superblock, 0);
     if(!bh){
         return -EIO;
     }
-    superblock = (struct onefilefs_sb_info *)bh->b_data;
-    blocksNumber = superblock->blocksNumber;
+    superblockInfo = (struct onefilefs_sb_info *)bh->b_data;
+    blocksNumber = superblockInfo->blocksNumber;
     brelse(bh);
 
+    // sanity check
     if (offset < 0 || offset >= blocksNumber-2) return -EINVAL;
-
-    // segnala la presenza del reader sulla variabile bdev
-    __sync_fetch_and_add(&(bd_metadata.usage),1);
-    bdev_temp = bd_metadata.bdev;
-    if (bdev_temp == NULL) {
-        printk(KERN_CRIT "%s: nessun device montato", MODNAME);
-        __sync_fetch_and_sub(&(bd_metadata.usage),1);
-        // wake_up_interruptible(&unmount_wq);
-        return -ENODEV;
-    }
 
     // prendi il lock in scrittura per la concorrenza con put_data ed altre invalidate_data
     // mutex_lock(&(rcu.write_lock)); 
@@ -294,48 +288,56 @@ asmlinkage int sys_invalidate_data(int offset) {
     // wait_event_interruptible(readers_wq, rcu.standing[index] >= grace_period_threads);
     // rcu.standing[index] = 0;
 
-    // aggiorna i metadati del blocco
-    bh = (struct buffer_head *) sb_bread(bdev_temp->bd_super, offset+2);
+    // gets the buffer_head
+    bh = (struct buffer_head *) sb_bread(superblock, offset+2);
     if (!bh) {
+        printk(KERN_CRIT "%s: buffer_head read error\n", MODNAME);
         ret = -EIO;
-        goto inv_exit;
+        goto exit;
     }
 
-    if (bh->b_data != NULL) {
-        block = (struct Block *) bh->b_data;
-        if (!block->isValid){
-            printk(KERN_CRIT "%s: il blocco %d è già invalidato\n", MODNAME, offset);
-            ret = -ENODATA;
-            goto inv_exit;
-        }
-        ret = updateSuperblockInvalidEntry(offset+2);
-        if (ret < -1) {
-            printk(KERN_CRIT "%s: problemi con l'aggiornamento del superblocco\n", MODNAME);
-            ret = -ENODEV;
-            goto inv_exit;
-        }
-        block->isValid = false;
-        block->nextInvalidBlock = ret;
-        mark_buffer_dirty(bh);
+    if (bh->b_data == NULL) {
+        printk(KERN_CRIT "%s: buffer_head data error\n", MODNAME);
+        ret = -EIO;
+        goto exit;
     }
 
-    // forza la scrittura in modo sincrono sul device
-// #ifdef SYNC_WRITE_BACK 
-//     if(sync_dirty_buffer(bh) == 0) {
-//         printk("%s: scrittura sincrona avvenuta con successo", MODNAME);
-//     } else
-//         printk(KERN_CRIT "%s: scrittura sincrona fallita", MODNAME);
-// #endif
+    // flags the block as invalid
+    block = (struct Block *) bh->b_data;
+    if (!block->isValid){
+        printk(KERN_CRIT "%s: block %d is already invalid\n", MODNAME, offset+2);
+        ret = -ENODATA;
+        goto exit;
+    }
+
+    // updates the superblock metadata by placing the newly invalidated block as the first of the invalidated blocks
+    ret = updateSuperblockInvalidEntry(offset+2);
+    if (ret < -2) {
+        printk(KERN_CRIT "%s: error updating superblock\n", MODNAME);
+        ret = -ENODEV;
+        goto exit;
+    }
+    block->isValid = false;
+    block->nextInvalidBlock = ret;
+    mark_buffer_dirty(bh);
+
+    // if 'SYNCHRONUS_WRITE_BACK' is not defined, write operations will be executed by the page-cache write back daemon
+    #ifdef SYNCHRONUS_WRITE_BACK
+    if(sync_dirty_buffer(bh) == 0)
+        printk("%s: synchronous writing successful", MODNAME);
+    else
+        printk(KERN_CRIT "%s: synchronous writing failed", MODNAME);
+    #endif
 
     brelse(bh);
     
-    printk("%s: block %d has been invalidated\n", MODNAME, offset);
+    printk("%s: block %d has been invalidated\n", MODNAME, offset+2);
 
     ret = offset+2;
 
-inv_exit:
+exit:
     // mutex_unlock(&(rcu.write_lock));
-    __sync_fetch_and_sub(&(bd_metadata.usage),1);
+    __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
     // wake_up_interruptible(&unmount_wq);
     return ret;
 }

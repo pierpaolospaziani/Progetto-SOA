@@ -17,9 +17,9 @@ static struct super_operations singlefilefs_super_ops = {
 static struct dentry_operations singlefilefs_dentry_ops = {
 };
 
-// filesystem and block device metadata setup
-struct block_device_metadata bd_metadata = {0, NULL};
-struct filesystem_metadata fs_metadata = {false, 0, " "};
+// filesystem metadata and superblock setup
+struct filesystem_metadata fs_metadata = {false, 0};
+struct super_block *superblock;
 
 
 int singlefilefs_fill_super(struct super_block *sb, void *data, int silent) {   
@@ -29,6 +29,8 @@ int singlefilefs_fill_super(struct super_block *sb, void *data, int silent) {
     struct onefilefs_sb_info *sb_disk;
     struct timespec64 curr_time;
     uint64_t magic;
+
+    superblock = sb;
 
     // Unique identifier of the filesystem
     sb->s_magic = MAGIC;
@@ -99,8 +101,6 @@ static void singlefilefs_kill_superblock(struct super_block *s) {
         return;
     }
 
-    // MANCA LA PERSISTENZA
-
     // MANCA LA PARTE RCU
 
     kill_block_super(s);
@@ -112,10 +112,8 @@ static void singlefilefs_kill_superblock(struct super_block *s) {
 struct dentry *singlefilefs_mount(struct file_system_type *fs_type, int flags, const char *dev_name, void *data) {
 
     bool alreadyMounted;
-    int len;
     struct dentry *ret;
     
-    // controllo se il filesystem è già montato
     alreadyMounted = __sync_val_compare_and_swap(&(fs_metadata.isMounted), false, true);
     if (alreadyMounted) {
         printk("%s: Filesystem already mounted\n", MODNAME);
@@ -126,23 +124,8 @@ struct dentry *singlefilefs_mount(struct file_system_type *fs_type, int flags, c
 
     if (unlikely(IS_ERR(ret)))
         printk(KERN_CRIT "%s: Error mounting filesystem!",MOD_NAME);
-    else{
-        // ottieni il nome del loop device in modo tale da accedere i dati successivamente
-        len = strlen(dev_name);
-        strncpy(fs_metadata.deviceName, dev_name, len);
-        fs_metadata.deviceName[len] = '\0';
-        bd_metadata.bdev = blkdev_get_by_path(fs_metadata.deviceName, FMODE_READ|FMODE_WRITE, NULL);
-        if (bd_metadata.bdev == NULL) {
-            printk(KERN_CRIT "%s: impossibile recuperare la struct block_device associata a %s", MODNAME, fs_metadata.deviceName);
-            return ERR_PTR(-EINVAL);
-        }
-
-        // restore_blocks(); // ripristino dello stato delle strutture del kernel dal dispositivo
-        
+    else
         printk("%s: Filesystem succesfully mounted on from device %s\n",MOD_NAME,dev_name);
-    }
-
-    // MANCA LA PERSISTENZA
 
     return ret;
 }
