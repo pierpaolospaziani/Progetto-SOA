@@ -9,7 +9,6 @@
 #include <linux/string.h>
 
 #include "singlefilefs.h"
-#include "../utils_header.h"
 
 static struct super_operations singlefilefs_super_ops = {
 };
@@ -20,7 +19,7 @@ static struct dentry_operations singlefilefs_dentry_ops = {
 
 // filesystem and block device metadata setup
 struct block_device_metadata bd_metadata = {0, NULL};
-struct filesystem_metadata fs_metadata = {false, ATOMIC_INIT(0), " "};
+struct filesystem_metadata fs_metadata = {false, 0, " "};
 
 
 int singlefilefs_fill_super(struct super_block *sb, void *data, int silent) {   
@@ -89,7 +88,7 @@ static void singlefilefs_kill_superblock(struct super_block *s) {
     
     bool isMounted;
 
-    if (atomic_read(&(fs_metadata.currentlyInUse)) != 0) {
+    if (&(fs_metadata.currentlyInUse) != 0) {
         printk(KERN_CRIT "%s: Unable to unmount the filesystem: some thread is using it!\n", MOD_NAME);
         return;
     }

@@ -9,7 +9,6 @@
 #include <stdbool.h>
 
 #include "singlefilefs.h"
-#include "../common_header.h"
 
 /*
 	This makefs will write the following information onto the disk
@@ -47,8 +46,9 @@ int main(int argc, char *argv[])
 	//pack the superblock
 	sb.version = 1;
 	sb.magic = MAGIC;
-	sb.firstInvalidBlock = 2;					// <-- DA VEDERE !!!
+	sb.firstInvalidBlock = 2;
 	sb.block_size = DEFAULT_BLOCK_SIZE;
+	sb.blocksNumber = blocksNumber;
 
 	ret = write(fd, (char *)&sb, sizeof(sb));
 	if (ret != DEFAULT_BLOCK_SIZE) {

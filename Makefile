@@ -1,7 +1,7 @@
 obj-m += my_module_try.o
 my_module_try-objs += module_setup.o lib/scth.o
 
-NBLOCKS := 6	# NBLOCKS includes also the superblock and the inode
+NUMBER_OF_BLOCKS := 6	# number of blocks (included superblock and inode)
 
 KVERSION = $(shell uname -r)
 
@@ -36,8 +36,8 @@ rmmod:
 	fi
 
 create-fs:
-	dd bs=4096 count=$(NBLOCKS) if=/dev/zero of=image
-	./filesystem/singlefilemakefs image $(NBLOCKS)
+	dd bs=4096 count=$(NUMBER_OF_BLOCKS) if=/dev/zero of=image
+	./filesystem/singlefilemakefs image $(NUMBER_OF_BLOCKS)
 	mkdir ./mount
 
 mount-fs:

@@ -27,7 +27,6 @@
 #include <linux/blkdev.h>
 
 #include "lib/include/scth.h"
-#include "common_header.h"
 #include "utils_header.h"
 #include "my_syscalls.c"
 #include "filesystem/singlefilefs_src.c"
@@ -78,7 +77,7 @@ int init_module(void) {
     // +=====================+
     // | Device Driver setup |
     // +=====================+
-    major = __register_chrdev(0, 0, 256, DEVICE_NAME, &onefilefs_file_operations);          // ---> file.c
+    major = __register_chrdev(0, 0, 256, DEVICE_NAME, &onefilefs_file_operations);
     if (major < 0) {
         printk(KERN_CRIT "%s: Device driver registration faild!\n", MODNAME);
         return major;
@@ -89,7 +88,7 @@ int init_module(void) {
     // +==================+
     // | Filesystem setup |
     // +==================+
-    ret = register_filesystem(&onefilefs_type);                                             // ---> singlefilefs_src.c
+    ret = register_filesystem(&onefilefs_type);
     if (likely(ret == 0))
         printk("%s: Filesystem registered\n", MODNAME);
     else
@@ -126,7 +125,7 @@ void cleanup_module(void) {
     // +=======================+
     // | Filesystem unregister |
     // +=======================+
-    if (likely(unregister_filesystem(&onefilefs_type) == 0)) 
+    if (likely(unregister_filesystem(&onefilefs_type) == 0))
         printk("%s: Filesystem unregistered\n", MODNAME);
     else
         printk(KERN_CRIT "%s: Unable to unregister the filesystem!\n", MODNAME);

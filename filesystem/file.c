@@ -56,8 +56,9 @@ int onefilefs_release(struct inode *inode, struct file *file) {
 
 ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t * off) {
 
-    int blockIndex, ret, length, offset=0;
+    int blockIndex, ret, length, offset=0, blocksNumber;
     // unsigned long my_epoch;
+    struct onefilefs_sb_info *superblock;
     struct buffer_head *bh = NULL;
     struct Block *block;
     
@@ -77,8 +78,17 @@ ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
     // segnala la presenza del reader
     // my_epoch = __sync_fetch_and_add(&(rcu.epoch),1);
 
+    bh = sb_bread(bd_metadata.bdev->bd_super, 0);
+    if(!bh){
+        ret = -EIO;
+        goto read_exit;
+    }
+    superblock = (struct onefilefs_sb_info *)bh->b_data;
+    blocksNumber = superblock->blocksNumber;
+    brelse(bh);
+
     // leggi i blocchi validi
-    for (blockIndex = 2; blockIndex < NBLOCKS; blockIndex++){
+    for (blockIndex = 2; blockIndex < blocksNumber; blockIndex++){
         bh = (struct buffer_head *) sb_bread(bd_metadata.bdev->bd_super, blockIndex);
         if (!bh) {
             ret = -EIO;
@@ -89,7 +99,7 @@ ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
             if (block->isValid){
                 length = strlen(block->data);
                 printk("%s: Read from block %u: %s\n", MODNAME, blockIndex, block->data);
-                ret = copy_to_user(buf, strcat(block->data, "\n"), length+1);
+                ret = copy_to_user(buf+offset, strcat(block->data, "\n"), length+1);
                 if (ret != 0){
                     printk(KERN_CRIT "%s: Unable to copy %d bytes from the block n.%d\n", MODNAME, ret, blockIndex);
                     ret = -EIO;

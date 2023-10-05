@@ -13,7 +13,7 @@
 #define DEFAULT_BUFFER_SIZE 128
 
 
-void put_data() {
+void put_data(int number) {
     
     // syscall(PUT_DATA, "source", 0);
     
@@ -21,7 +21,7 @@ void put_data() {
     char source[DEFAULT_BUFFER_SIZE];
     size_t size;
     
-    strcpy(source, "Questo è un esempio di stringa in C");
+    sprintf(source, "Questo è un esempio di stringa: %d", number);
     size = strlen(source);
 
     do {
@@ -33,7 +33,7 @@ void put_data() {
         fflush(stdout);
     }
     else {
-        printf("Esecuzione test_put_syscall() fallita\n");
+        printf("ERROR: test_put_syscall() failed\n");
         fflush(stdout);
     }
 }
@@ -50,7 +50,7 @@ void get_data(int offset) {
         printf("Esecuzione test_get_syscall() terminata con successo sul blocco %d - read:\n\t%s\n", offset, destination);
         fflush(stdout);
     } else {
-        printf("Esecuzione test_get_syscall() fallita\n");
+        printf("ERROR: test_get_syscall() failed\n");
         fflush(stdout);
     }
 }
@@ -62,36 +62,37 @@ void invalidate_data(int offset) {
     ret = syscall(INVALIDATE_DATA, offset);
     
     if(ret >= 0) {
-        printf("Esecuzione test_invalidate_syscall() terminata con successo, invalidato il blocco %d\n", ret);
+        printf("Esecuzione test_invalidate_syscall() terminata con successo, invalidato il blocco %d\n", offset+2);
         fflush(stdout);
     }
     else {
-        printf("Esecuzione test_invalidate_syscall() fallita\n");
+        printf("ERROR: test_invalidate_syscall() failed\n");
         fflush(stdout);
     }
 }
 
 int main(int argc, char *argv[]) {
 
-    if (argc < 2) {
-        fprintf(stderr, "Utilizzo: %s <valore>\n", argv[0]);
+    if (argc < 3) {
+        fprintf(stderr, "Utilizzo: %s <operation>\n", argv[0]);
         return 1;
     }
 
-    int valore = atoi(argv[1]);
+    int operation = atoi(argv[1]);
+    int value = atoi(argv[2]);
 
-    switch (valore) {
+    switch (operation) {
         case 1:
-            put_data();
+            put_data(value);
             break;
         case 2:
-            get_data(atoi(argv[2]));
+            get_data(value);
             break;
         case 3:
-            invalidate_data(atoi(argv[2]));
+            invalidate_data(value);
             break;
         default:
-            fprintf(stderr, "Valore non valido: %d\n", valore);
+            fprintf(stderr, "ERROR: invalid operation: %d\n", operation);
             return 1;
     }
 

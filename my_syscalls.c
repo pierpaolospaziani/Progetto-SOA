@@ -113,13 +113,12 @@ asmlinkage int sys_put_data(char* source, size_t size) {
 
     // aggiorna 'firstInvalidBlock' con il valore di 'nextInvalidBlock' del blocco selezionato
     ret = updateSuperblockInvalidEntry(((struct Block *) bh->b_data)->nextInvalidBlock);
-    if (ret < 0) {
-        printk(KERN_CRIT "%s: problemi con l'aggiornamento del superblocco\n", MODNAME);
+    if (ret < -1) {
+        printk(KERN_CRIT "%s: problemi con l'aggiornamento del superblocco: %d\n", MODNAME, ret);
         ret = -ENODEV;
         goto put_exit;
     }
 
-    // aggiunta concorrente sul blocco selezionato evitata grazie alla cas precedente
     if (bh->b_data != NULL) {
         memcpy(bh->b_data, (char *) newBlock, sizeof(struct Block));
         mark_buffer_dirty(bh);
@@ -158,16 +157,25 @@ __SYSCALL_DEFINEx(3, _get_data, int, offset, char*, destination, size_t, size) {
 asmlinkage int sys_get_data(int offset, char* destination, size_t size) {
 #endif
 
-    int ret, len, return_val;
+    int ret, len, return_val, blocksNumber;
     char end_str = '\0';
     // unsigned long my_epoch;
+    struct onefilefs_sb_info *superblock;
     struct buffer_head *bh = NULL;
     struct block_device *bdev_temp;
     struct Block *block;
 
     printk("%s: get_data invocata", MODNAME);
 
-    if (offset < 0 || offset >= NBLOCKS-2 || size < 0 || destination == NULL){
+    bh = sb_bread(bd_metadata.bdev->bd_super, 0);
+    if(!bh){
+        return -EIO;
+    }
+    superblock = (struct onefilefs_sb_info *)bh->b_data;
+    blocksNumber = superblock->blocksNumber;
+    brelse(bh);
+
+    if (offset < 0 || offset >= blocksNumber-2 || size < 0 || destination == NULL){
         printk(KERN_CRIT "%s: sys_get_data() error: invalid input!\n", MODNAME);
         return -EINVAL;
     }
@@ -242,15 +250,24 @@ __SYSCALL_DEFINEx(1, _invalidate_data, int, offset) {
 asmlinkage int sys_invalidate_data(int offset) {
 #endif
 
-    int ret = 0;
+    int ret = 0, blocksNumber;
     
+    struct onefilefs_sb_info *superblock;
     struct buffer_head *bh;
     struct Block *block;
     struct block_device *bdev_temp;
 
     printk("%s: invalidate_data invocata\n", MODNAME);
 
-    if (offset < 0 || offset >= NBLOCKS-2) return -EINVAL;
+    bh = sb_bread(bd_metadata.bdev->bd_super, 0);
+    if(!bh){
+        return -EIO;
+    }
+    superblock = (struct onefilefs_sb_info *)bh->b_data;
+    blocksNumber = superblock->blocksNumber;
+    brelse(bh);
+
+    if (offset < 0 || offset >= blocksNumber-2) return -EINVAL;
 
     // segnala la presenza del reader sulla variabile bdev
     __sync_fetch_and_add(&(bd_metadata.usage),1);
@@ -291,14 +308,15 @@ asmlinkage int sys_invalidate_data(int offset) {
             ret = -ENODATA;
             goto inv_exit;
         }
-        block->isValid = false;
-        mark_buffer_dirty(bh);
         ret = updateSuperblockInvalidEntry(offset+2);
-        if (ret < 0) {
+        if (ret < -1) {
             printk(KERN_CRIT "%s: problemi con l'aggiornamento del superblocco\n", MODNAME);
             ret = -ENODEV;
             goto inv_exit;
         }
+        block->isValid = false;
+        block->nextInvalidBlock = ret;
+        mark_buffer_dirty(bh);
     }
 
     // forza la scrittura in modo sincrono sul device
@@ -310,6 +328,10 @@ asmlinkage int sys_invalidate_data(int offset) {
 // #endif
 
     brelse(bh);
+    
+    printk("%s: block %d has been invalidated\n", MODNAME, offset);
+
+    ret = offset+2;
 
 inv_exit:
     // mutex_unlock(&(rcu.write_lock));

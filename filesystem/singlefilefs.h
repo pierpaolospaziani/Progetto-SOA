@@ -3,9 +3,7 @@
 
 #include <linux/types.h>
 #include <linux/fs.h>
-
-#include "../common_header.h"
-
+#include <linux/version.h>
 
 #define MOD_NAME "SINGLE_FILE_FS"
 
@@ -21,6 +19,10 @@
 #define SINGLEFILEFS_INODES_BLOCK_NUMBER 1
 
 #define UNIQUE_FILE_NAME "the-file"
+
+#define DEFAULT_BLOCK_SIZE 4096
+#define METADATA_SIZE 9
+
 
 //inode definition
 struct onefilefs_inode {
@@ -49,14 +51,31 @@ struct onefilefs_sb_info {
 	uint64_t inodes_count;//not exploited
 	uint64_t free_blocks;//not exploited
 	
+	// invalid block are managed in a LIFO linked list:
+	//  - 'firstInvalidBlock' is the index of the last invalidated block
+	//  - each invalid block has in 'nextInvalidBlock' the index of the previous invalid one
 	uint64_t firstInvalidBlock;
+	uint64_t blocksNumber;
 
 	//padding to fit into a single block
-	char padding[ (4 * 1024) - (6 * sizeof(uint64_t))];
+	char padding[ (4 * 1024) - (7 * sizeof(uint64_t))];
 };
 
 
-//block definition
+// block metadata definition
+struct block_device_metadata {
+    unsigned int usage;
+    struct block_device *bdev;
+};
+
+// filesystem metadata definition
+struct filesystem_metadata {
+    bool isMounted;
+    unsigned int currentlyInUse;
+    char deviceName[20];
+};
+
+// block definition
 struct Block {
     // metadata
     bool isValid;
@@ -64,6 +83,8 @@ struct Block {
     // data
     char data[DEFAULT_BLOCK_SIZE - METADATA_SIZE];
 };
+
+extern struct block_device_metadata bd_metadata;
 
 
 // file.c

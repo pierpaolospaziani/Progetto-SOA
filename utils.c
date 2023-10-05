@@ -45,18 +45,20 @@ int getInvalidBlockIndex() {
     return superblock->firstInvalidBlock;
 }
 
-// aggiorna il valore di 'firstInvalidBlock' nel superblocco con il valore passato come parametro
+// aggiorna il valore di 'firstInvalidBlock' nel superblocco con il valore passato come parametro e ritorna il vecchio 'firstInvalidBlock'
 int updateSuperblockInvalidEntry(int blockNumber) {
 
     struct buffer_head *bh;
     struct onefilefs_sb_info *superblock;
+    int oldInvalidBlock;
 
     bh = sb_bread(bd_metadata.bdev->bd_super, 0);
     if (!bh) {
-        return -1;
+        return -2;  // -1 non posso usarlo perchè viene utilizzato per indicare che è il primo della lista dei blocchi invalidi
     }
 
     superblock = (struct onefilefs_sb_info *)bh->b_data;
+    oldInvalidBlock = superblock->firstInvalidBlock;
     superblock->firstInvalidBlock = blockNumber;
     mark_buffer_dirty(bh);
 
@@ -66,5 +68,6 @@ int updateSuperblockInvalidEntry(int blockNumber) {
     // #endif
 
     brelse(bh);
-    return 0;
+
+    return oldInvalidBlock;
 }
