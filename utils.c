@@ -5,7 +5,7 @@
 #include <linux/slab.h>
 
 #include "filesystem/singlefilefs.h"
-#include "utils_header.h"
+#include "defines.h"
 
 int isValidBlock(int);
 int getInvalidBlockIndex(void);
@@ -63,7 +63,6 @@ int updateSuperblockInvalidEntry(int blockNumber) {
     superblockInfo->firstInvalidBlock = blockNumber;
     mark_buffer_dirty(bh);
 
-    // if 'SYNCHRONUS_WRITE_BACK' is not defined, write operations will be executed by the page-cache write back daemon
     #ifdef SYNCHRONUS_WRITE_BACK
     if(sync_dirty_buffer(bh) != 0)
         return -2;

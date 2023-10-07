@@ -7,8 +7,10 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/mutex.h>
 
 #include "singlefilefs.h"
+#include "rcu.h"
 
 static struct super_operations singlefilefs_super_ops = {
 };
@@ -17,9 +19,12 @@ static struct super_operations singlefilefs_super_ops = {
 static struct dentry_operations singlefilefs_dentry_ops = {
 };
 
-// filesystem metadata and superblock setup
+// filesystem metadata, superblock and rcu setup
 struct filesystem_metadata fs_metadata = {false, 0};
 struct super_block *superblock;
+struct rcu_metadata rcu;
+// wait_queue for rcu readers declaration
+DECLARE_WAIT_QUEUE_HEAD(rcu_wq);
 
 
 int singlefilefs_fill_super(struct super_block *sb, void *data, int silent) {   
@@ -90,7 +95,7 @@ static void singlefilefs_kill_superblock(struct super_block *s) {
     
     bool isMounted;
 
-    if (&(fs_metadata.currentlyInUse) != 0) {
+    if (fs_metadata.currentlyInUse != 0) {
         printk(KERN_CRIT "%s: Unable to unmount the filesystem: some thread is using it!\n", MOD_NAME);
         return;
     }
@@ -101,8 +106,6 @@ static void singlefilefs_kill_superblock(struct super_block *s) {
         return;
     }
 
-    // MANCA LA PARTE RCU
-
     kill_block_super(s);
     printk("%s: Filesystem unmounted succesfully\n",MOD_NAME);
     return;
@@ -111,6 +114,7 @@ static void singlefilefs_kill_superblock(struct super_block *s) {
 
 struct dentry *singlefilefs_mount(struct file_system_type *fs_type, int flags, const char *dev_name, void *data) {
 
+    int i;
     bool alreadyMounted;
     struct dentry *ret;
     
@@ -119,6 +123,12 @@ struct dentry *singlefilefs_mount(struct file_system_type *fs_type, int flags, c
         printk("%s: Filesystem already mounted\n", MODNAME);
         return ERR_PTR(-EBUSY);
     }
+
+    // rcu init
+    for (i=0; i<EPOCHS; i++)
+        rcu.readers[i] = 0;
+    rcu.epoch = 0;
+    mutex_init(&rcu.write_lock);
 
     ret = mount_bdev(fs_type, flags, dev_name, data, singlefilefs_fill_super);
 

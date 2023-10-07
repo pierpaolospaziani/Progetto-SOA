@@ -9,32 +9,31 @@
 #include <linux/string.h>
 
 #include "singlefilefs.h"
-#include "../utils_header.h"
 
 
 int onefilefs_open(struct inode *inode, struct file *file) {
     
-    printk("%s: trying to open ...\n", MODNAME);
+    printk("%s: trying to open ...\n", MOD_NAME);
 
     // increase the usage counter
     __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
     
     // check if it's mounted
     if (!&(fs_metadata.isMounted)) {
-        printk(KERN_CRIT "%s: No device mounted\n", MODNAME);
+        printk(KERN_CRIT "%s: No device mounted\n", MOD_NAME);
         return -ENODEV;
     }
 
     // the device must be read_only
     if (file->f_mode & FMODE_WRITE) {
-        printk(KERN_CRIT "%s: Unable to open the device in write mode\n", MODNAME);
+        printk(KERN_CRIT "%s: Unable to open the device in write mode\n", MOD_NAME);
         return -EROFS;
     }
     
     // decrease the usage counter
     __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
 
-    printk("%s: open success\n", MODNAME);
+    printk("%s: ... open success\n", MOD_NAME);
     
     return 0;
 }
@@ -42,21 +41,21 @@ int onefilefs_open(struct inode *inode, struct file *file) {
 
 int onefilefs_release(struct inode *inode, struct file *file) {
 
-    printk("%s: releasing ...\n", MODNAME);
+    printk("%s: trying to release ...\n", MOD_NAME);
     
     // increase the usage counter
     __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
 
     // check if it's mounted
     if (!&(fs_metadata.isMounted)) {
-        printk(KERN_CRIT "%s: No device mounted\n", MODNAME);
+        printk(KERN_CRIT "%s: No device mounted\n", MOD_NAME);
         return -ENODEV;
     }
 
     // decrease the usage counter
     __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
 
-    printk("%s: release success\n", MODNAME);
+    printk("%s: ... release success\n", MOD_NAME);
 
     return 0;
 }
@@ -65,31 +64,29 @@ int onefilefs_release(struct inode *inode, struct file *file) {
 ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t * off) {
 
     int blockIndex, ret, length, offset=0, blocksNumber;
-    // unsigned long my_epoch;
     struct onefilefs_sb_info *superblockInfo;
     struct buffer_head *bh = NULL;
     struct Block *block;
+    char *buffer;
+
+    if (*off != 0) return 0;
     
-    printk("%s: trying to read ...\n", MODNAME);
+    printk("%s: trying to read ...\n", MOD_NAME);
 
     // increase the usage counter
     __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
 
     // check if it's mounted
     if (!&(fs_metadata.isMounted)) {
-        printk(KERN_CRIT "%s: No device mounted\n", MODNAME);
-        __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
-        // wake_up_interruptible(&unmount_wq);
-        return -ENODEV;
+        printk(KERN_CRIT "%s: No device mounted\n", MOD_NAME);
+        ret = -ENODEV;
+        goto exit;
     }
-
-    // segnala la presenza del reader
-    // my_epoch = __sync_fetch_and_add(&(rcu.epoch),1);
 
     bh = sb_bread(superblock, 0);
     if(!bh){
         ret = -EIO;
-        goto read_exit;
+        goto exit;
     }
     superblockInfo = (struct onefilefs_sb_info *)bh->b_data;
     blocksNumber = superblockInfo->blocksNumber;
@@ -100,32 +97,42 @@ ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
         bh = sb_bread(superblock, blockIndex);
         if (!bh) {
             ret = -EIO;
-            goto read_exit;
+            goto exit;
         }
         if (bh->b_data != NULL) {
             block = (struct Block *) bh->b_data;
             if (block->isValid){
                 length = strlen(block->data);
-                ret = copy_to_user(buf+offset, strcat(block->data, "\n"), length+1);
-                if (ret != 0){
-                    printk(KERN_CRIT "%s: Unable to copy %d bytes from the block n.%d\n", MODNAME, ret, blockIndex);
-                    ret = -EIO;
-                    goto read_exit;
+
+                buffer = kmalloc(strlen(block->data)+1, GFP_KERNEL);
+                if (!buffer) {
+                    printk("%s: kmalloc error\n", MOD_NAME);
+                    ret = -1;
+                    goto exit;
                 }
-                offset += length+1;
-                printk("%s: %d bytes copied\n", MODNAME, length+1-ret);
+
+                memcpy(buffer, block->data, length);
+                strcat(buffer, "\n");
+                length = strlen(buffer);
+
+                ret = copy_to_user(buf+offset, buffer, length);
+                if (ret != 0){
+                    printk(KERN_CRIT "%s: Unable to copy %d bytes from the block n.%d\n", MOD_NAME, ret, blockIndex);
+                    ret = -EIO;
+                    goto exit;
+                }
+                offset += length;
             }
         }
         brelse(bh);
     }
     ret = offset;
 
-read_exit:
-    // index = (my_epoch & MASK) ? 1 : 0;
-    // __sync_fetch_and_add(&(rcu.standing[index]),1);
-    // wake_up_interruptible(&readers_wq);
+    printk("%s: ... read success\n", MOD_NAME);
+
+exit:
     __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
-    // wake_up_interruptible(&unmount_wq);
+    *off += ret;
 
     return ret;
 }

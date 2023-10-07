@@ -104,7 +104,6 @@ int main(int argc, char *argv[])
 		else
 			dummyBlock->nextInvalidBlock = blockIndex+1;
 
-		// scrittura dei blocchi
 		ret = write(fd, dummyBlock, sizeof(struct Block));
 		if (ret != sizeof(struct Block)) {
 			printf("Writing file datablock has failed, just %ld bytes\n", ret);

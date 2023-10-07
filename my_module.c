@@ -27,7 +27,7 @@
 #include <linux/blkdev.h>
 
 #include "lib/include/scth.h"
-#include "utils_header.h"
+#include "defines.h"
 #include "my_syscalls.c"
 #include "filesystem/singlefilefs_src.c"
 #include "filesystem/file.c"

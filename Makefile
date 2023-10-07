@@ -1,5 +1,5 @@
-obj-m += my_module_try.o
-my_module_try-objs += module_setup.o lib/scth.o
+obj-m += my_mod.o
+my_mod-objs += my_module.o lib/scth.o
 
 NUMBER_OF_BLOCKS := 6	# number of blocks (included superblock and inode)
 
@@ -8,7 +8,7 @@ KVERSION = $(shell uname -r)
 all:
 	gcc filesystem/singlefilemakefs.c -o filesystem/singlefilemakefs
 	make -C /lib/modules/$(KVERSION)/build M=$(PWD) modules
-	gcc test/test.c -o test/test
+	gcc test/test.c -o test/test -lpthread
 
 clean:
 	make -C /lib/modules/$(KVERSION)/build M=$(PWD) clean
@@ -23,16 +23,16 @@ insmod:
 		$(MAKE) -C syscall-table; \
 		make -C syscall-table insmod; \
 	fi
-	insmod my_module_try.ko the_syscall_table=$$(cat /sys/module/the_usctm/parameters/sys_call_table_address)
+	insmod my_mod.ko the_syscall_table=$$(cat /sys/module/the_usctm/parameters/sys_call_table_address)
 
 rmmod:
 	@if lsmod | grep -q the_usctm; then \
 		echo "Removing module the_usctm..."; \
 		rmmod the_usctm; \
 	fi
-	@if lsmod | grep -q my_module_try; then \
-		echo "Removing module module_setup..."; \
-		rmmod my_module_try; \
+	@if lsmod | grep -q my_mod; then \
+		echo "Removing module my_module..."; \
+		rmmod my_mod; \
 	fi
 
 create-fs:

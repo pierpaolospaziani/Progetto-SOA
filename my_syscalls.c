@@ -28,7 +28,8 @@
 #include <linux/delay.h>
 
 #include "utils.c"
-#include "utils_header.h"
+#include "defines.h"
+#include "filesystem/rcu.h"
 
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
@@ -37,11 +38,8 @@ __SYSCALL_DEFINEx(2, _put_data, char*, source, size_t, size) {
 asmlinkage int sys_put_data(char* source, size_t size) {
 #endif
     
-    int ret, len, invalidBlockIndex;
-
+    int ret, len, invalidBlockIndex, oldEpoch;
     char *buffer;
-    char end_str = '\0';
-
     struct buffer_head *bh = NULL;
     struct Block *newBlock;
 
@@ -49,15 +47,19 @@ asmlinkage int sys_put_data(char* source, size_t size) {
 
     // sanity check
     if (source == NULL || size >= DEFAULT_BLOCK_SIZE - METADATA_SIZE){
+        printk(KERN_CRIT "%s: sys_put_data() error: invalid input!\n", MODNAME);
         ret = -EINVAL;
         goto exit;
     }
+
+    // locking the mutex to avoid concurrency
+    mutex_lock(&(rcu.write_lock));
 
     // increase the usage counter
     __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
     
     // allocation of kernel buffer for the message
-    buffer = kmalloc(size+1, GFP_KERNEL);
+    buffer = kmalloc(size, GFP_KERNEL);
     if (!buffer) {
         printk(KERN_CRIT "%s: buffer kmalloc error\n", MODNAME);
         ret = -ENOMEM;
@@ -69,7 +71,6 @@ asmlinkage int sys_put_data(char* source, size_t size) {
     len = strlen(buffer);
     if (strlen(buffer) < size)
         size = len;
-    buffer[size] = end_str;
 
     // initializes the new block to be inserted
     newBlock = kmalloc(sizeof(struct Block), GFP_KERNEL);
@@ -80,7 +81,7 @@ asmlinkage int sys_put_data(char* source, size_t size) {
     }
     newBlock->isValid = true;
     newBlock->nextInvalidBlock = -1;
-    memcpy(newBlock->data, buffer, size+1);
+    memcpy(newBlock->data, buffer, size);
 
     // searches for an overwritable block
     invalidBlockIndex = getInvalidBlockIndex();
@@ -89,21 +90,21 @@ asmlinkage int sys_put_data(char* source, size_t size) {
         ret = -ENOMEM;
         goto exit;
     }
-
-    // attesa della fine del grace period
-    // synchronize_srcu(&(au_info.srcu));
-
-    // prendi il lock in scrittura per la concorrenza con invalidate_data
-    // mutex_lock(&(rcu.write_lock));
         
     // gets the buffer_head
     bh = sb_bread(superblock, invalidBlockIndex);
     if (!bh) {
         printk(KERN_CRIT "%s: buffer_head read error\n", MODNAME);
         ret = -EIO;
-        // mutex_unlock(&(rcu.write_lock));    // <---
         goto exit;
     }
+
+    // move to a new epoch (concurrency avoided with write_lock)
+    oldEpoch = rcu.epoch;
+    rcu.epoch = (rcu.epoch+1)%EPOCHS;
+    printk("%s: put_data (waiting %lu readers)\n", MODNAME, rcu.readers[oldEpoch]);
+    wait_event_interruptible(rcu_wq, rcu.readers[oldEpoch] <= 0);
+    printk("%s: put_data wait end\n", MODNAME);
 
     // updates 'firstInvalidBlock' with the value of 'nextInvalidBlock' of the selected block
     ret = updateSuperblockInvalidEntry(((struct Block *) bh->b_data)->nextInvalidBlock);
@@ -123,7 +124,6 @@ asmlinkage int sys_put_data(char* source, size_t size) {
     memcpy(bh->b_data, (char *) newBlock, sizeof(struct Block));
     mark_buffer_dirty(bh);
 
-    // if 'SYNCHRONUS_WRITE_BACK' is not defined, write operations will be executed by the page-cache write back daemon
     #ifdef SYNCHRONUS_WRITE_BACK
     if(sync_dirty_buffer(bh) == 0)
         printk("%s: synchronous writing successful", MODNAME);
@@ -134,11 +134,9 @@ asmlinkage int sys_put_data(char* source, size_t size) {
     brelse(bh);
     ret = invalidBlockIndex;
 
-    // mutex_unlock(&(rcu.write_lock));
-
 exit:
+    mutex_unlock(&(rcu.write_lock));
     __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
-    // wake_up_interruptible(&unmount_wq);
     kfree(buffer);
     kfree(newBlock);
     return ret;
@@ -151,9 +149,7 @@ __SYSCALL_DEFINEx(3, _get_data, int, offset, char*, destination, size_t, size) {
 asmlinkage int sys_get_data(int offset, char* destination, size_t size) {
 #endif
 
-    int ret, blocksNumber;
-    char end_str = '\0';
-    // unsigned long my_epoch;
+    int ret, blocksNumber, myEpoch;
     struct onefilefs_sb_info *superblockInfo;
     struct buffer_head *bh = NULL;
     struct Block *block;
@@ -162,6 +158,10 @@ asmlinkage int sys_get_data(int offset, char* destination, size_t size) {
 
     // increase the usage counter
     __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
+
+    // increase the readers counter in rcu
+    myEpoch = rcu.epoch;
+    __sync_fetch_and_add(&(rcu.readers[myEpoch]),1);
 
     // retrieve the blocksNumber
     bh = sb_bread(superblock, 0);
@@ -181,9 +181,6 @@ asmlinkage int sys_get_data(int offset, char* destination, size_t size) {
         goto exit;
     }
     size = (size >= DEFAULT_BLOCK_SIZE - METADATA_SIZE) ? (DEFAULT_BLOCK_SIZE - METADATA_SIZE) : size;
-
-    // segnala la presenza del reader per evitare che uno scrittore riutilizzi lo stesso blocco mentre lo si sta leggendo
-    // my_epoch = __sync_fetch_and_add(&(rcu.epoch),1);
 
     // gets the buffer_head
     bh = (struct buffer_head *) sb_bread(superblock, offset+2);
@@ -219,26 +216,20 @@ asmlinkage int sys_get_data(int offset, char* destination, size_t size) {
         ret = -EIO;
         goto exit;
     }
-    ret = copy_to_user(destination+size, &end_str, 1);
-    if (ret != 0){
-        printk(KERN_CRIT "%s: copy_to_user error\n", MODNAME);
-        ret = -EIO;
-        goto exit;
-    }
 
-    ret = size+1;
+    ret = size;
 
     printk("%s: %d bytes loaded\n", MODNAME, ret);
 
     brelse(bh);
 
 exit:
-    // // the first bit in my_epoch is the index where we must release the counter
-    // index = (my_epoch & MASK) ? 1 : 0;
-    // __sync_fetch_and_add(&(rcu.standing[index]),1);
+    #ifdef TEST_RCU
+    ssleep(2);
+    #endif
     __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
-    // wake_up_interruptible(&readers_wq);
-    // wake_up_interruptible(&unmount_wq);
+    __sync_fetch_and_sub(&(rcu.readers[myEpoch]),1);
+    wake_up_interruptible(&rcu_wq);
 
     return ret;
 }
@@ -250,13 +241,15 @@ __SYSCALL_DEFINEx(1, _invalidate_data, int, offset) {
 asmlinkage int sys_invalidate_data(int offset) {
 #endif
 
-    int ret = 0, blocksNumber;
-    
+    int ret = 0, blocksNumber, oldEpoch;
     struct onefilefs_sb_info *superblockInfo;
     struct buffer_head *bh;
     struct Block *block;
 
     printk("%s: invalidate_data called ...\n", MODNAME);
+
+    // locking the mutex to avoid concurrency
+    mutex_lock(&(rcu.write_lock));
 
     // increase the usage counter
     __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
@@ -264,29 +257,20 @@ asmlinkage int sys_invalidate_data(int offset) {
     // retrieve the blocksNumber
     bh = sb_bread(superblock, 0);
     if(!bh){
-        return -EIO;
+        printk(KERN_CRIT "%s: buffer_head read error\n", MODNAME);
+        ret = -EIO;
+        goto exit;
     }
     superblockInfo = (struct onefilefs_sb_info *)bh->b_data;
     blocksNumber = superblockInfo->blocksNumber;
     brelse(bh);
 
     // sanity check
-    if (offset < 0 || offset >= blocksNumber-2) return -EINVAL;
-
-    // prendi il lock in scrittura per la concorrenza con put_data ed altre invalidate_data
-    // mutex_lock(&(rcu.write_lock)); 
-
-    // // move to a new epoch
-    // updated_epoch = (rcu.next_epoch_index) ? MASK : 0;
-    // rcu.next_epoch_index += 1;
-    // rcu.next_epoch_index %= 2;  
-
-    // last_epoch = __atomic_exchange_n (&(rcu.epoch), updated_epoch, __ATOMIC_SEQ_CST);
-    // index = (last_epoch & MASK) ? 1 : 0; 
-    // grace_period_threads = last_epoch & (~MASK); 
-    
-    // wait_event_interruptible(readers_wq, rcu.standing[index] >= grace_period_threads);
-    // rcu.standing[index] = 0;
+    if (offset < 0 || offset >= blocksNumber-2){
+        printk(KERN_CRIT "%s: sys_invalidate_data() error: invalid input!\n", MODNAME);
+        ret = -EINVAL;
+        goto exit;
+    }
 
     // gets the buffer_head
     bh = (struct buffer_head *) sb_bread(superblock, offset+2);
@@ -302,13 +286,20 @@ asmlinkage int sys_invalidate_data(int offset) {
         goto exit;
     }
 
-    // flags the block as invalid
+    // check if the block is already invalid
     block = (struct Block *) bh->b_data;
     if (!block->isValid){
         printk(KERN_CRIT "%s: block %d is already invalid\n", MODNAME, offset+2);
         ret = -ENODATA;
         goto exit;
     }
+
+    // move to a new epoch (concurrency avoided with write_lock)
+    oldEpoch = rcu.epoch;
+    rcu.epoch = (rcu.epoch+1)%EPOCHS;
+    printk("%s: invalidate_data (waiting %lu readers)\n", MODNAME, rcu.readers[oldEpoch]);
+    wait_event_interruptible(rcu_wq, rcu.readers[oldEpoch] <= 0);
+    printk("%s: invalidate_data wait end\n", MODNAME);
 
     // updates the superblock metadata by placing the newly invalidated block as the first of the invalidated blocks
     ret = updateSuperblockInvalidEntry(offset+2);
@@ -321,7 +312,6 @@ asmlinkage int sys_invalidate_data(int offset) {
     block->nextInvalidBlock = ret;
     mark_buffer_dirty(bh);
 
-    // if 'SYNCHRONUS_WRITE_BACK' is not defined, write operations will be executed by the page-cache write back daemon
     #ifdef SYNCHRONUS_WRITE_BACK
     if(sync_dirty_buffer(bh) == 0)
         printk("%s: synchronous writing successful", MODNAME);
@@ -336,9 +326,8 @@ asmlinkage int sys_invalidate_data(int offset) {
     ret = offset+2;
 
 exit:
-    // mutex_unlock(&(rcu.write_lock));
+    mutex_unlock(&(rcu.write_lock));
     __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
-    // wake_up_interruptible(&unmount_wq);
     return ret;
 }
 
