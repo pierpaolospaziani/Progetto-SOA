@@ -21,17 +21,16 @@ int onefilefs_open(struct inode *inode, struct file *file) {
     // check if it's mounted
     if (!&(fs_metadata.isMounted)) {
         printk(KERN_CRIT "%s: No device mounted\n", MOD_NAME);
+        __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
         return -ENODEV;
     }
 
     // the device must be read_only
     if (file->f_mode & FMODE_WRITE) {
         printk(KERN_CRIT "%s: Unable to open the device in write mode\n", MOD_NAME);
+        __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
         return -EROFS;
     }
-    
-    // decrease the usage counter
-    __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
 
     printk("%s: ... open success\n", MOD_NAME);
     
@@ -42,13 +41,11 @@ int onefilefs_open(struct inode *inode, struct file *file) {
 int onefilefs_release(struct inode *inode, struct file *file) {
 
     printk("%s: trying to release ...\n", MOD_NAME);
-    
-    // increase the usage counter
-    __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
 
     // check if it's mounted
     if (!&(fs_metadata.isMounted)) {
         printk(KERN_CRIT "%s: No device mounted\n", MOD_NAME);
+        __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
         return -ENODEV;
     }
 
@@ -72,9 +69,6 @@ ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
     if (*off != 0) return 0;
     
     printk("%s: trying to read ...\n", MOD_NAME);
-
-    // increase the usage counter
-    __sync_fetch_and_add(&(fs_metadata.currentlyInUse),1);
 
     // check if it's mounted
     if (!&(fs_metadata.isMounted)) {
@@ -131,7 +125,6 @@ ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
     printk("%s: ... read success\n", MOD_NAME);
 
 exit:
-    __sync_fetch_and_sub(&(fs_metadata.currentlyInUse),1);
     *off += ret;
 
     return ret;
