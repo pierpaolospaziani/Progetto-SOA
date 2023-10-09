@@ -43,6 +43,8 @@ asmlinkage int sys_put_data(char* source, size_t size) {
     struct buffer_head *bh = NULL;
     struct Block *newBlock;
 
+    printBlocks();
+
     printk("%s: sys_put_data() called ...\n", MODNAME);
 
     // sanity check
@@ -67,6 +69,8 @@ asmlinkage int sys_put_data(char* source, size_t size) {
     }
 
     // copies the user buffer into the kernel buffer
+    strcat(source,"\0");
+    size += 1;
     ret = copy_from_user(buffer, source, size);
     len = strlen(buffer);
     if (strlen(buffer) < size)
@@ -107,7 +111,7 @@ asmlinkage int sys_put_data(char* source, size_t size) {
     printk("%s: put_data wait end\n", MODNAME);
 
     // updates 'firstInvalidBlock' with the value of 'nextInvalidBlock' of the selected block
-    ret = updateSuperblockInvalidEntry(((struct Block *) bh->b_data)->nextInvalidBlock);
+    ret = updateSuperblockValidEntry(((struct Block *) bh->b_data)->nextInvalidBlock);
     if (ret < -2) {
         printk(KERN_CRIT "%s: an error occurred during the superblock update\n", MODNAME);
         ret = -EIO;
@@ -119,6 +123,7 @@ asmlinkage int sys_put_data(char* source, size_t size) {
         ret = -EIO;
         goto exit;
     }
+    newBlock->nextValidBlock = ret;
 
     // writing the data
     memcpy(bh->b_data, (char *) newBlock, sizeof(struct Block));
@@ -133,6 +138,8 @@ asmlinkage int sys_put_data(char* source, size_t size) {
 
     brelse(bh);
     ret = invalidBlockIndex;
+
+    printBlocks();
 
 exit:
     mutex_unlock(&(rcu.write_lock));
@@ -246,6 +253,8 @@ asmlinkage int sys_invalidate_data(int offset) {
     struct buffer_head *bh;
     struct Block *block;
 
+    printBlocks();
+
     printk("%s: invalidate_data called ...\n", MODNAME);
 
     // locking the mutex to avoid concurrency
@@ -302,13 +311,14 @@ asmlinkage int sys_invalidate_data(int offset) {
     printk("%s: invalidate_data wait end\n", MODNAME);
 
     // updates the superblock metadata by placing the newly invalidated block as the first of the invalidated blocks
-    ret = updateSuperblockInvalidEntry(offset+2);
+    ret = updateSuperblockInvalidEntry(offset+2, block->nextValidBlock);
     if (ret < -2) {
         printk(KERN_CRIT "%s: error updating superblock\n", MODNAME);
         ret = -ENODEV;
         goto exit;
     }
     block->isValid = false;
+    block->nextValidBlock = -1;
     block->nextInvalidBlock = ret;
     mark_buffer_dirty(bh);
 
@@ -324,6 +334,8 @@ asmlinkage int sys_invalidate_data(int offset) {
     printk("%s: block %d has been invalidated\n", MODNAME, offset+2);
 
     ret = offset+2;
+
+    printBlocks();
 
 exit:
     mutex_unlock(&(rcu.write_lock));

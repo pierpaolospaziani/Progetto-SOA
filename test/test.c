@@ -18,7 +18,7 @@
 
 #define NBLOCKS 4
 
-#define NTHREADS 10
+#define NTHREADS 4
 
 pthread_barrier_t barrier;
 

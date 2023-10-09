@@ -9,11 +9,13 @@ all:
 	gcc filesystem/singlefilemakefs.c -o filesystem/singlefilemakefs
 	make -C /lib/modules/$(KVERSION)/build M=$(PWD) modules
 	gcc test/test.c -o test/test -lpthread
+	gcc test/user.c -o test/user
 
 clean:
 	make -C /lib/modules/$(KVERSION)/build M=$(PWD) clean
 	rm ./filesystem/singlefilemakefs
 	rm ./test/test
+	rm ./test/user
 	rmdir ./mount
 	rm image
 

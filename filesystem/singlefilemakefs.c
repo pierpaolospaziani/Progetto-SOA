@@ -47,6 +47,7 @@ int main(int argc, char *argv[])
 	sb.version = 1;
 	sb.magic = MAGIC;
 	sb.firstInvalidBlock = 2;
+	sb.firstValidBlock = -1;
 	sb.block_size = DEFAULT_BLOCK_SIZE;
 	sb.blocksNumber = blocksNumber;
 
@@ -94,16 +95,17 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 	dummyBlock->isValid = false;
+	dummyBlock->nextValidBlock = -1;
 	memset(dummyBlock->data, 0, DEFAULT_BLOCK_SIZE - METADATA_SIZE);
 
 	//write file datablock
 	for (blockIndex = 2; blockIndex < blocksNumber; blockIndex++) {
 		
-	    if (blockIndex == blocksNumber-1)
+		if (blockIndex == blocksNumber-1)
 			dummyBlock->nextInvalidBlock = -1;
 		else
 			dummyBlock->nextInvalidBlock = blockIndex+1;
-
+		
 		ret = write(fd, dummyBlock, sizeof(struct Block));
 		if (ret != sizeof(struct Block)) {
 			printf("Writing file datablock has failed, just %ld bytes\n", ret);

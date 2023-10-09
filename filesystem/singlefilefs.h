@@ -21,7 +21,7 @@
 #define UNIQUE_FILE_NAME "the-file"
 
 #define DEFAULT_BLOCK_SIZE 4096
-#define METADATA_SIZE 9
+#define METADATA_SIZE 12
 
 
 //inode definition
@@ -55,10 +55,14 @@ struct onefilefs_sb_info {
 	//  - 'firstInvalidBlock' is the index of the last invalidated block
 	//  - each invalid block has in 'nextInvalidBlock' the index of the previous invalid one
 	uint64_t firstInvalidBlock;
+	// valid block are managed in a FIFO linked list:
+	//  - 'firstValidBlock' is the index of the first valid block
+	//  - each valid block has in 'nextValidBlock' the index of the next valid one
+	uint64_t firstValidBlock;
 	uint64_t blocksNumber;
 
 	//padding to fit into a single block
-	char padding[ (4 * 1024) - (7 * sizeof(uint64_t))];
+	char padding[ (4 * 1024) - (8 * sizeof(uint64_t))];
 };
 
 // filesystem metadata definition
@@ -73,6 +77,7 @@ struct Block {
     // metadata
     bool isValid;
     unsigned int nextInvalidBlock;
+    unsigned int nextValidBlock;
     // data
     char data[DEFAULT_BLOCK_SIZE - METADATA_SIZE];
 };

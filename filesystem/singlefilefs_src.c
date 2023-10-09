@@ -137,6 +137,8 @@ struct dentry *singlefilefs_mount(struct file_system_type *fs_type, int flags, c
     else
         printk("%s: Filesystem succesfully mounted on from device %s\n",MOD_NAME,dev_name);
 
+    printBlocks();
+
     return ret;
 }
 

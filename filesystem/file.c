@@ -60,11 +60,11 @@ int onefilefs_release(struct inode *inode, struct file *file) {
 
 ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t * off) {
 
-    int blockIndex, ret, length, offset=0, blocksNumber;
+    int blockIndex, ret, length, tempLength=0, firstValidBlock, blockNumber;
     struct onefilefs_sb_info *superblockInfo;
     struct buffer_head *bh = NULL;
     struct Block *block;
-    char *buffer;
+    char *buffer, *tempBuff;
 
     if (*off != 0) return 0;
     
@@ -83,44 +83,61 @@ ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
         goto exit;
     }
     superblockInfo = (struct onefilefs_sb_info *)bh->b_data;
-    blocksNumber = superblockInfo->blocksNumber;
+    firstValidBlock = superblockInfo->firstValidBlock;
     brelse(bh);
 
     // read only valid blocks
-    for (blockIndex = 2; blockIndex < blocksNumber; blockIndex++){
-        bh = sb_bread(superblock, blockIndex);
+    blockNumber = firstValidBlock;
+    while (blockNumber != -1){
+        bh = sb_bread(superblock, blockNumber);
         if (!bh) {
-            ret = -EIO;
+            return -1;
+        }
+        block = (struct Block *) bh->b_data;
+
+        length = strlen(block->data);
+
+        if (tempLength != 0){
+            tempBuff = kmalloc(strlen(buffer), GFP_KERNEL);
+            if (!tempBuff) {
+                printk(KERN_CRIT "%s: kmalloc error\n", MOD_NAME);
+                ret = -1;
+                goto exit;
+            }
+            strcpy(tempBuff, buffer);
+            kfree(buffer);
+            length += 1;
+        }
+
+        buffer = kmalloc(length+tempLength, GFP_KERNEL);
+        if (!buffer) {
+            printk(KERN_CRIT "%s: kmalloc error\n", MOD_NAME);
+            ret = -1;
             goto exit;
         }
-        if (bh->b_data != NULL) {
-            block = (struct Block *) bh->b_data;
-            if (block->isValid){
-                length = strlen(block->data);
 
-                buffer = kmalloc(strlen(block->data)+1, GFP_KERNEL);
-                if (!buffer) {
-                    printk("%s: kmalloc error\n", MOD_NAME);
-                    ret = -1;
-                    goto exit;
-                }
-
-                memcpy(buffer, block->data, length);
-                strcat(buffer, "\n");
-                length = strlen(buffer);
-
-                ret = copy_to_user(buf+offset, buffer, length);
-                if (ret != 0){
-                    printk(KERN_CRIT "%s: Unable to copy %d bytes from the block n.%d\n", MOD_NAME, ret, blockIndex);
-                    ret = -EIO;
-                    goto exit;
-                }
-                offset += length;
-            }
+        strncpy(buffer, block->data, strlen(block->data));
+        
+        if (tempLength != 0){
+            strcat(buffer, "\n");
+            strcat(buffer, tempBuff);
+            kfree(tempBuff);
         }
+        tempLength = strlen(buffer);
+
+        blockNumber = block->nextValidBlock;
         brelse(bh);
     }
-    ret = offset;
+
+    ret = copy_to_user(buf, buffer, tempLength);
+    if (ret != 0){
+        printk(KERN_CRIT "%s: Unable to copy %d bytes from the block n.%d\n", MOD_NAME, ret, blockIndex);
+        ret = -EIO;
+        goto exit;
+    }
+    kfree(buffer);
+
+    ret = tempLength;
 
     printk("%s: ... read success\n", MOD_NAME);
 
