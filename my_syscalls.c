@@ -43,7 +43,7 @@ asmlinkage int sys_put_data(char* source, size_t size) {
     struct buffer_head *bh = NULL;
     struct Block *newBlock;
 
-    printBlocks();
+    // printBlocks();
 
     printk("%s: sys_put_data() called ...\n", MODNAME);
 
@@ -69,8 +69,6 @@ asmlinkage int sys_put_data(char* source, size_t size) {
     }
 
     // copies the user buffer into the kernel buffer
-    strcat(source,"\0");
-    size += 1;
     ret = copy_from_user(buffer, source, size);
     len = strlen(buffer);
     if (strlen(buffer) < size)
@@ -139,7 +137,7 @@ asmlinkage int sys_put_data(char* source, size_t size) {
     brelse(bh);
     ret = invalidBlockIndex;
 
-    printBlocks();
+    // printBlocks();
 
 exit:
     mutex_unlock(&(rcu.write_lock));
@@ -253,7 +251,7 @@ asmlinkage int sys_invalidate_data(int offset) {
     struct buffer_head *bh;
     struct Block *block;
 
-    printBlocks();
+    // printBlocks();
 
     printk("%s: invalidate_data called ...\n", MODNAME);
 
@@ -335,7 +333,7 @@ asmlinkage int sys_invalidate_data(int offset) {
 
     ret = offset+2;
 
-    printBlocks();
+    // printBlocks();
 
 exit:
     mutex_unlock(&(rcu.write_lock));

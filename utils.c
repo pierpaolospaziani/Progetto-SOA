@@ -142,8 +142,8 @@ int updateValidChain(int firstValidBlock, int newInvalidBlock, int nextValidBloc
     return 0;
 }
 
-// update the value of 'firstInvalidBlock' in the superblock with the value passed as a parameter
-// returns the old 'firstInvalidBlock'
+// update the value of 'firstInvalidBlock' and 'firstValidBlock' in the superblock with the value passed as a parameter
+// returns the old 'firstValidBlock'
 int updateSuperblockValidEntry(int nextInvalidBlock) {
 
     struct buffer_head *bh;

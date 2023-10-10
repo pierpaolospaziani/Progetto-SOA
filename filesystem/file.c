@@ -106,10 +106,10 @@ ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
             }
             strcpy(tempBuff, buffer);
             kfree(buffer);
-            length += 1;
+            length += tempLength + 1;
         }
 
-        buffer = kmalloc(length+tempLength, GFP_KERNEL);
+        buffer = kmalloc(length, GFP_KERNEL);
         if (!buffer) {
             printk(KERN_CRIT "%s: kmalloc error\n", MOD_NAME);
             ret = -1;
@@ -118,8 +118,8 @@ ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
 
         strncpy(buffer, block->data, strlen(block->data));
         
+        strcat(buffer, "\n");
         if (tempLength != 0){
-            strcat(buffer, "\n");
             strcat(buffer, tempBuff);
             kfree(tempBuff);
         }
