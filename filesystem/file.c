@@ -60,7 +60,7 @@ int onefilefs_release(struct inode *inode, struct file *file) {
 
 ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t * off) {
 
-    int blockIndex, ret, length, tempLength=0, firstValidBlock, blockNumber;
+    int blockIndex, ret, length, tempLength=0, firstValidBlock, blockNumber, myEpoch;
     struct onefilefs_sb_info *superblockInfo;
     struct buffer_head *bh = NULL;
     struct Block *block;
@@ -76,6 +76,10 @@ ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
         ret = -ENODEV;
         goto exit;
     }
+
+    // increase the readers counter in rcu
+    myEpoch = rcu.epoch;
+    __sync_fetch_and_add(&(rcu.readers[myEpoch]),1);
 
     bh = sb_bread(superblock, 0);
     if(!bh){
@@ -143,6 +147,8 @@ ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t
 
 exit:
     *off += ret;
+    __sync_fetch_and_sub(&(rcu.readers[myEpoch]),1);
+    wake_up_interruptible(&rcu_wq);
 
     return ret;
 }
