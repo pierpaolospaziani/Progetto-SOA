@@ -5,11 +5,10 @@
 ## Index
 1. [Introduction](#introduction)
 2. [Data Structures](#data-structures)
-3. [System call](#system-call)
-4. [File operation](#file-operation)
-5. [Sincronizzazione](#sincronizzazione)
-6. [Software di livello user](#software-di-livello-user)
-7. [Howto](#howto)
+3. [System calls](#system-calls)
+4. [File operations](#file-operations)
+5. [User software](#user-software)
+6. [Guide](#guide)
 
 ## Introduction
 
@@ -34,6 +33,8 @@ The device driver supports file system operations allowing the access to the cur
 The device driver can support a single mount at a time. When the device is not mounted, both file system operations and the VFS non-supported system calls will return the *ENODEV* error.
 
 The maximum number of manageable blocks is configurable at compile time via the `NBLOCKS` parameter in the *Makefile*.
+
+Writes to the device can be performed by the *page-cache write back daemon* or synchronously, the choice is configurable at compile time via the `SYNCHRONUS_WRITE_BACK` in *defines.h*. If commented, write operations will be executed by the *page-cache write back daemon*, otherwise synchronously.
 
 ## Data Structures
 
@@ -67,7 +68,7 @@ A structure maintained in RAM holds file system metadata:
 -   `unsigned int currentlyInUse`: number of threads that are currently using the file system.
 
 ### RCU metadata
-Per la sincronizzazione è stato utilizzato l'approccio RCU. I metadati a supporto del sistema sono:
+The RCU approach was used for synchronization. The metadata supporting the system are:
   ```
   struct rcu_metadata {
     unsigned long readers[EPOCHS];
@@ -77,27 +78,27 @@ Per la sincronizzazione è stato utilizzato l'approccio RCU. I metadati a suppor
 
 wait_queue_head_t rcu_wq;
   ```
--   `unsigned long readers[EPOCHS]`: ogni posizione fa riferimento ad un'epoca ed ogni valore indica il numero di readers in quella determinata epoca.
--   `unsigned long epoch`: indica l'epoca corrente.
-- `struct mutex write_lock`: utilizzato per evitare scritture concorrenti.
-- `wait_queue_head_t rcu_wq`: utilizzata per l'attesa dei scrittori in presenza di readers.
-> **Note:** *EPOCHS* è una macro configurabile in *rcu.h*, il valore di default è 2.
+-   `unsigned long readers[EPOCHS]`: each position refers to an epoch and each value indicates the number of readers in that specific epoch.
+-   `unsigned long epoch`: indicates the current epoch.
+- `struct mutex write_lock`: used to avoid concurrent writes.
+- `wait_queue_head_t rcu_wq`: used to make writers wait when readers are present.
+> **Note:** *EPOCHS* is a configurable macro in *rcu.h*, the default value is 2.
 
-## System call
+## System calls
 ### int put_data(char* source, size_t size)
- 1. Effettua un check sulla validità dei parametri in input.
- 2. Prende il lock `write_lock` per evitare scritture concorrenti.
- 3. Incrementa atomicamente con `__sync_fetch_and_add` lo *usage counter* del file system `currentlyInUse`.
- 4. Tramite `kmalloc` viene alloca un kernel buffer per accogliere il messaggio utente, copiato con `copy_from_user`.
- 5. Inizializza e popola il blocco che deve sostituire il primo invalido (se esiste), ovvero quello ad offset `firstInvalidBlock` (valore mantenuto nel *superblocco*). Nel caso in cui non esista, la system call termina con l’errore *ENOMEM*.
- 6. Inizia un nuova epoca RCU e, se sono presenti readers nella precedente, attende la fine delle letture andando in sleep su `rcu_wq` con `wait_event_interruptible`.
- 7. Sovrascrive il *blocco selezionato* e aggiorna le liked list di blocchi *validi* e *invalidi*:
-  - nel *superblocco*:
-    - `firstInvalidBlock` aggiornato con in valore di `nextInvalidBlock` del *blocco selezionato*.
-    - `firstValidBlock` aggiornato con l'offset del *blocco selezionato* (ovvero il vecchio valore di `firstInvalidBlock`).
-  - nel *blocco selezionato*:
-    - `nextInvalidBlock` invalidato (gli viene assegnato -1).
-    - `nextValidBlock` aggiornato con il vecchio valore di `firstValidBlock` del *superblocco*.
+1. Checks the validity of the input parameters.
+2. Takes the `write_lock` lock to avoid concurrent writes.
+3. Increments atomically with `__sync_fetch_and_add` the *usage counter* of the file system's `currentlyInUse` field.
+4. `kmalloc` allocates a kernel buffer to accommodate the user message, copied with `copy_from_user`.
+5. Initializes and populates the block that must replace the first invalid (if it exists), i.e. the one at offset `firstInvalidBlock` (value maintained in the *superblock*). If it does not exist, the system call ends with the *ENOMEM* error.
+6. Starts a new RCU epoch and, if there are readers in the previous one, waits for the end of the readings by going to sleep on `rcu_wq` with `wait_event_interruptible`.
+7. Overwrites the *selected block* and updates the linked lists of *valid* and *invalid* blocks:
+  - in the *superblock*:
+    - `firstInvalidBlock` updated with the value of `nextInvalidBlock` of the *selected block*.
+    - `firstValidBlock` updated with the offset of the *selected block* (i.e. the old value of `firstInvalidBlock`).
+  - in the *selected block*:
+    - `nextInvalidBlock` invalidated (set to -1).
+    - `nextValidBlock` updated with the old *superblock* `firstValidBlock` value.
   ```mermaid
   graph LR
   A(Superblock) -- firstInvalidBlock --> B(Selected Block)
@@ -110,36 +111,36 @@ wait_queue_head_t rcu_wq;
   A -- firstValidBlock --> B(Selected Block)
   B -- nextValidBlock --> C(Valid Block)
   ```
- 8. Rilascia il lock `write_lock`.
- 9. Decrementa atomicamente con `__sync_fetch_and_sub` lo *usage counter* del file system `currentlyInUse`.
+8. Release the `write_lock` lock.
+9. Decrements atomically with `__sync_fetch_and_sub` the *usage counter* of the `currentlyInUse` file system.
 
 ### int get_data(int offset, char* destination, size_t size)
- 1. Effettua un check sulla validità dei parametri in input.
- 2. Incrementa atomicamente con `__sync_fetch_and_add` lo *usage counter* del file system `currentlyInUse`.
- 3. Incrementa atomicamente con `__sync_fetch_and_add` il *readers counter* nei metadati di RCU per l'epoca corrente in `readers[epoch]`.
- 4. Accede al blocco richiesto (con `offset+2` per evitare superblocco e inode).
- 5. Controlla la validità del blocco dal campo `isValid`, se è invalido la system call termina con l’errore *ENODATA*.
- 6. Utilizzando `copy_to_user`, copia `size` bytes del campo `data` del blocco nel buffer `destination`.
- 7. Decrementa atomicamente con  `__sync_fetch_and_sub`  lo  _usage counter_  del file system  `currentlyInUse`.
- 8. Decrementa atomicamente con `__sync_fetch_and_sub` il *readers counter* nei metadati di RCU per l'epoca corrente in `readers[epoch]`.
- 9. Sveglia i thread dormienti sulla `rcu_wq` con `wake_up_interruptible`.
+1. Checks the validity of the input parameters.
+2. Increments atomically with `__sync_fetch_and_add` the *usage counter* of the `currentlyInUse` file system.
+3. Increments atomically with `__sync_fetch_and_add` the *readers counter* in the RCU metadata for the current epoch in `readers[epoch]`.
+4. Access the requested block (with `offset+2` to avoid superblock and inode).
+5. Checks the validity of the block from the `isValid` field, if it is invalid the system call ends with the *ENODATA* error.
+6. Using `copy_to_user`, copies `size` bytes of the block's `data` field into the `destination` buffer.
+7. Decrements atomically with `__sync_fetch_and_sub` the _usage counter_ of the `currentlyInUse` file system.
+8. Decrements atomically with `__sync_fetch_and_sub` the *readers counter* in the RCU metadata for the current epoch in `readers[epoch]`.
+9. Wakes up sleeping threads on `rcu_wq` with `wake_up_interruptible`.
 
 ### int invalidate_data(int offset)
- 1. Effettua un check sulla validità del parametro in input.
- 2. Prende il lock `write_lock` per evitare scritture concorrenti.
- 3. Incrementa atomicamente con `__sync_fetch_and_add` lo *usage counter* del file system `currentlyInUse`.
- 4. Accede al blocco richiesto (con `offset+2` per evitare superblocco e inode).
- 5. Controlla la validità del blocco dal campo `isValid`, se è invalido la system call termina con l’errore *ENODATA*.
- 6. Inizia un nuova epoca RCU e, se sono presenti readers nella precedente, attende la fine delle letture andando in sleep su `rcu_wq` con `wait_event_interruptible`.
- 7. Aggiorna il *blocco selezionato* e aggiorna le liked list di blocchi *validi* e *invalidi*:
-  - nel *superblocco*:
-    - `firstInvalidBlock` aggiornato con l'offset del *blocco selezionato*.
-  - nel blocco precedente a quello selezionato nella valid linked list, quello con `nextValidBlock` pari all'offset del *blocco selezionato* (nello schema *Valid Block 1*):
-    - `nextValidBlock` aggiornato con in valore di `nextValidBlock` del *blocco selezionato*.
-  - nel *blocco selezionato*:
-    - `isValid` impostato a *False*.
-    - `nextInvalidBlock` aggiornato con il vecchio valore di `firstInvalidBlock` del *superblocco*.
-    - `nextValidBlock` invalidato (gli viene assegnato -1).
+1. Checks the validity of the input parameter.
+2. Takes the `write_lock` lock to avoid concurrent writes.
+3. Increments atomically with `__sync_fetch_and_add` the *usage counter* of the `currentlyInUse` file system.
+4. Accesses the requested block (with `offset+2` to avoid superblock and inode).
+5. Checks the validity of the block from the `isValid` field, if it is invalid the system call ends with the *ENODATA* error.
+6. Starts a new RCU epoch and, if there are readers in the previous one, waits for the end of the readings by going to sleep on `rcu_wq` with `wait_event_interruptible`.
+7. Updates the *selected block* and updates the liked lists of *valid* and *invalid* blocks:
+  - in the *superblock*:
+    - `firstInvalidBlock` updated with the offset of the *selected block*.
+  - in the block preceding the one selected in the valid linked list, the one with `nextValidBlock` equal to the offset of the *selected block* (*Valid Block 1* in the  scheme):
+    - `nextValidBlock` updated with the `nextValidBlock` value of the *selected block*.
+  - in the *selected block*:
+    - `isValid` set to *False*.
+    - `nextInvalidBlock` updated with the old *superblock* `firstInvalidBlock` value.
+    - `nextValidBlock` invalidated (set to -1).
   ```mermaid
   graph LR
   A(Superblock) -- firstInvalidBlock --> D(Invalid Block)
@@ -154,25 +155,30 @@ wait_queue_head_t rcu_wq;
   B -- nextInvalidBlock --> D(Invalid Block)
   C -- nextValidBlock --> E(Valid Block 2)
   ```
- 8. Rilascia il lock `write_lock`
- 9. Decrementa atomicamente con `__sync_fetch_and_sub` lo *usage counter* del file system `currentlyInUse`. 
+8. Release the `write_lock` lock.
+9. Decrements atomically with `__sync_fetch_and_sub` the *usage counter* of the `currentlyInUse` file system.
 
-## File operation
+## File operations
 
 ### int onefilefs_open(struct inode *inode, struct file *file)
-1. Incrementa atomicamente con `__sync_fetch_and_add` lo *usage counter* del file system `currentlyInUse`.
-2. Controlla con il campo `isMounted` se il dispositivo è montato.
-3. Apre il file e controlla se è stato aperto in modalità *read-only*.
+1. Increments atomically with `__sync_fetch_and_add` the *usage counter* of the `currentlyInUse` file system.
+2. Checks with the `isMounted` field whether the device is mounted.
+3. Opens the file and checks if it was opened in *read-only* mode.
 
 ### int onefilefs_release(struct inode *inode, struct file *file)
-1. Controlla con il campo `isMounted` se il dispositivo è montato.
-2. Decrementa atomicamente con `__sync_fetch_and_sub` lo *usage counter* del file system `currentlyInUse`. 
-3. Il file viene chiuso
+1. Checks with the `isMounted` field whether the device is mounted.
+2. Decrements atomically with `__sync_fetch_and_sub` the *usage counter* of the `currentlyInUse` file system.
+3. The file is closed.
 
 ### ssize_t onefilefs_read(struct file * filp, char __user * buf, size_t len, loff_t * off)
-1. Controlla con il campo `isMounted` se il dispositivo è montato.
-2. Incrementa atomicamente con `__sync_fetch_and_add` il *readers counter* nei metadati di RCU per l'epoca corrente in `readers[epoch]`.
-3. Scorrendo la *valid linked list* si copiano dai blocchi i campi `data` per poi riversarli con `copy_to_user` nel buffer `buf`.
-4. Decrementa atomicamente con  `__sync_fetch_and_sub`  lo  _usage counter_  del file system  `currentlyInUse`.
-5. Decrementa atomicamente con `__sync_fetch_and_sub` il *readers counter* nei metadati di RCU per l'epoca corrente in `readers[epoch]`.
-6. Sveglia i thread dormienti sulla `rcu_wq` con `wake_up_interruptible`.
+1. Checks with the `isMounted` field whether the device is mounted.
+2. Increments atomically with `__sync_fetch_and_add` the *readers counter* in the RCU metadata for the current epoch in `readers[epoch]`.
+3. Scrolling the *valid linked list*, copies the `data` fields from the blocks and then transfers them with `copy_to_user` into `buf`.
+4. Decrements atomically with `__sync_fetch_and_sub` the _usage counter_ of the `currentlyInUse` file system.
+5. Decrements atomically with `__sync_fetch_and_sub` the *readers counter* in the RCU metadata for the current epoch in `readers[epoch]`.
+6. Wakes up sleeping threads on `rcu_wq` with `wake_up_interruptible`.
+
+## User software
+
+BlaBlaBlaBla
+- The lo
