@@ -40,6 +40,14 @@ Writes to the device can be performed by the *page-cache write back daemon* or s
 
 ### Blocks
 Blocks are composed of **12 bytes of metadata** and **4084 bytes of data**:
+ ```
+struct Block {
+    bool isValid;
+    unsigned int nextInvalidBlock;
+    unsigned int nextValidBlock;
+    char data[DEFAULT_BLOCK_SIZE - METADATA_SIZE];
+};
+  ```
 -   `bool isValid`: indicates the validity of the block.
 -   `unsigned int nextInvalidBlock`: the offset of the next *invalid* block.
 -   `unsigned int nextValidBlock`: the offset of the next *valid* block.
@@ -48,6 +56,16 @@ Blocks are composed of **12 bytes of metadata** and **4084 bytes of data**:
 
 ### Superblock
 The device superblock is composed of the following fields:
+ ```
+struct onefilefs_sb_info {
+  uint64_t version;
+  uint64_t magic;
+  uint64_t block_size;
+  uint64_t firstInvalidBlock;
+  uint64_t firstValidBlock;
+  uint64_t blocksNumber;
+};
+  ```
 -   `uint64_t version`: indicates the file system version.
 -   `uint64_t magic`: indicates the magic number associated with the file system.
 -   `uint64_t block_size`: indicates the size of each block of memory that makes up the device.
