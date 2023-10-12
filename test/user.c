@@ -6,115 +6,116 @@
 #include <errno.h>
 #include <sys/ioctl.h>
 
-#include "user_header.h"
+#define PUT_DATA         134
+#define GET_DATA         156
+#define INVALIDATE_DATA  174
+
+#define DEFAULT_BUFFER_SIZE 4084
+
+char menu[] = {"\n\
+ +=================================================+\n\
+ |      BLOCK-LEVEL DATA MANAGEMENT SERVICE        |\n\
+ +-------------------------------------------------+\n\
+ |      1) PUT DATA                                |\n\
+ |      2) GET DATA                                |\n\
+ |      3) INVALIDATE DATA                         |\n\
+ |      4) EXIT                                    |\n\
+ +=================================================+\n\n"};
 
 
 void put_data() {
 
     int ret;
-    ssize_t size;
-    char *source;
+    char source[DEFAULT_BUFFER_SIZE];
+    size_t size;
 
-    source = (char *) malloc(sizeof(char) * 4096);
-    if (source == NULL) {
-        printf("malloc error\n");
-        exit(-1);
-    }
+    printf("\n What do you want to write? > ");
+    fgets(source, DEFAULT_BUFFER_SIZE, stdin);
 
-    printf("\nInserire il messaggio: ");
-    fgets(source, 4096, stdin);
-
-    if (strlen(source) == 0) {
-        printf("\nMessaggio inserito vuoto");
-        return;
-    }
-
-    if ((strlen(source) > 0) && (source[strlen(source)-1] == '\n'))
-        source[strlen(source)-1] = '\0';
     size = strlen(source);
-    printf("\nHai inserito un messaggio lungo %ld caratteri\n", size);
-    printf("Messaggio acquisito: %s", source);
 
-    printf("\nInvocazione della syscall put_data...\n");
-    
     ret = syscall(PUT_DATA, source, size);
-    
-    print_put_ret(ret);
+
+    if(ret >= 0) {
+        printf("\n Message correctly wrote on block %d\n", ret-2);
+        fflush(stdout);
+    } else {
+        fprintf(stderr, "\n ERROR: %s\n", strerror(errno));
+    }
 }
 
 void get_data() {
 
     int ret, offset;
-    ssize_t size = 2048; // 2048 è un semplice valore per il testing
-    char *destination;
+    char destination[DEFAULT_BUFFER_SIZE];
+    ssize_t size;
 
-    destination = (char *) malloc(sizeof(char) * 4096);
-    if (destination == NULL) {
-        printf("malloc error\n");
-        exit(-1);
-    } 
-
-    printf("Inserire l'offset (un blocco utente da 0 a N-1): ");
+    printf("\n Which block do you wanna read? > ");
     scanf("%d", &offset);
-    flush(stdin);
+    while(getchar() != '\n');
 
-    printf("Inserire il numero di byte da leggere dal blocco: ");
+    printf("\n How many bytes? > ");
     scanf("%ld", &size);
-    flush(stdin);
+    while(getchar() != '\n');
+    
+    ret = syscall(GET_DATA, offset, destination, DEFAULT_BUFFER_SIZE);
 
-    ret = syscall(GET_DATA, offset, destination, size);
-    print_get_ret(ret, offset, destination);
-
-    free(destination);
+    if(ret >= 0) {
+        printf("\n Block %d: %s", offset, destination);
+        fflush(stdout);
+    } else {
+        fprintf(stderr, "\n ERROR: %s\n", strerror(errno));
+    }
 }
 
 void invalidate_data() {
 
-    int offset, ret;
+    int ret, offset;
 
-    printf("Inserire l'offset (un blocco da 0 a N-1): ");
+    printf("\n Which block do you wanna invalidate? > ");
     scanf("%d", &offset);
-    flush(stdin);
+    while(getchar() != '\n');
 
     ret = syscall(INVALIDATE_DATA, offset);
 
-    print_invalidate_ret(ret, offset);
+    if(ret >= 0) {
+        printf("\n Block %d invalidated\n", offset);
+        fflush(stdout);
+    } else {
+        fprintf(stderr, "\n ERROR: %s\n", strerror(errno));
+    }
 }
 
 int main(int argc, char *argv[]) {
     
     int op, ret;
-    char mount_command[1024];
-
-    system("clear");
 
     while (1) {
-        printf("%s\nScegli un operazione: ", menu);
+        system("clear");
+        printf("%s Choose an option: > ", menu);
         scanf("%d", &op);
-        flush(stdin);
+        while(getchar() != '\n');
         switch (op) {
             case 1:
                 put_data();
-                printf("\nPremere invio per tornare al menu...");
+                printf("\n [Press ENTER to go back]");
                 while(getchar() != '\n');
                 break;
             case 2:
                 get_data();
-                printf("\nPremere invio per tornare al menu...");
+                printf("\n [Press ENTER to go back]");
                 while(getchar() != '\n');
                 break;
             case 3:
                 invalidate_data();
-                printf("\nPremere invio per tornare al menu...");
+                printf("\n [Press ENTER to go back]");
                 while(getchar() != '\n');
                 break;
             case 4:
-                goto exit;
+                return 0;
             default:
-                printf("\nScelta non valida...\n");
                 break;
         }
     }
-exit:
     return 0;
 }

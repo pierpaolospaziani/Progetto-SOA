@@ -1,14 +1,16 @@
 obj-m += my_mod.o
 my_mod-objs += my_module.o lib/scth.o
 
-NBLOCKS := 6	# number of blocks (included superblock and inode)
+NBLOCKS := 10	# number of blocks (included superblock and inode)
+
+NTHREADS := 50	# number of threads used in 'test'
 
 KVERSION = $(shell uname -r)
 
 all:
 	gcc filesystem/singlefilemakefs.c -o filesystem/singlefilemakefs
 	make -C /lib/modules/$(KVERSION)/build M=$(PWD) modules
-	gcc test/test.c -o test/test -lpthread
+	gcc test/test.c -o test/test -D NBLOCKS=$(NBLOCKS) -D NTHREADS=$(NTHREADS) -lpthread
 	gcc test/user.c -o test/user
 
 clean:

@@ -14,23 +14,20 @@
 #define GET_DATA         156
 #define INVALIDATE_DATA  174
 
-#define DEFAULT_BUFFER_SIZE 128
-
-#define NBLOCKS 4
-
-#define NTHREADS 4
+#define DEFAULT_BUFFER_SIZE 4084
 
 pthread_barrier_t barrier;
 
 void *put_data(void *arg) {
         
-    int ret, number;
+    int ret;
     char source[DEFAULT_BUFFER_SIZE];
     size_t size;
+    pthread_t tid;
 
-    number = *(int*)arg;
+    tid = *(pthread_t *)arg;
     
-    sprintf(source, "Questo è un esempio di stringa: %d", number);
+    sprintf(source, "Thread %ld wrote this", tid);
     size = strlen(source);
 
     pthread_barrier_wait(&barrier);
@@ -42,10 +39,10 @@ void *put_data(void *arg) {
     ret = syscall(PUT_DATA, source, size);
 
     if(ret >= 0) {
-        printf("Thread %d wrote on block %d\n", number, ret);
+        printf("[THREAD %ld] PUT - Wrote on block %d\n", tid, ret-2);
         fflush(stdout);
     } else {
-        perror("ERROR: put_syscall() failed");
+        fprintf(stderr, "[THREAD %ld] PUT ERROR: %s\n",tid, strerror(errno));
     }
 }
 
@@ -53,28 +50,34 @@ void *get_data(void *arg) {
 
     int ret, offset;
     char destination[DEFAULT_BUFFER_SIZE];
+    pthread_t tid;
 
-    offset = *(int*)arg;
+    tid = *(pthread_t *)arg;
 
     pthread_barrier_wait(&barrier);
+
+    offset = tid%(NBLOCKS-2);
 
     ret = syscall(GET_DATA, offset, destination, DEFAULT_BUFFER_SIZE);
     
     if(ret >= 0) {
-        printf("[Block %d]: %s\n", offset, destination);
+        printf("[THREAD %ld] GET - Block %d: %s\n", tid, offset, destination);
         fflush(stdout);
     } else {
-        perror("ERROR: get_syscall() failed");
+        fprintf(stderr, "[THREAD %ld] GET ERROR: %s\n",tid, strerror(errno));
     }
 }
 
 void *invalidate_data(void *arg) {
 
     int ret, offset;
+    pthread_t tid;
 
-    offset = *(int*)arg;
+    tid = *(pthread_t *)arg;
 
     pthread_barrier_wait(&barrier);
+
+    offset = tid%(NBLOCKS-2);
 
     #ifdef TEST_RCU
     usleep(1000000);
@@ -83,16 +86,35 @@ void *invalidate_data(void *arg) {
     ret = syscall(INVALIDATE_DATA, offset);
     
     if(ret >= 0) {
-        printf("Block %d invalidated\n", offset+2);
+        printf("[THREAD %ld] INV - Block %d invalidated\n", tid, offset);
         fflush(stdout);
     } else {
-        perror("ERROR: invalidate_syscall() failed");
+        fprintf(stderr, "[THREAD %ld] INV ERROR: %s\n",tid, strerror(errno));
     }
+}
+
+void *cat(void *arg) {
+
+    pthread_t tid;
+    int ret;
+    char cwd[1024];
+
+    tid = *(pthread_t *)arg;
+
+    pthread_barrier_wait(&barrier);
+
+    if (strstr(getcwd(cwd, sizeof(cwd)), "test") != NULL)
+        ret = system("cat ../mount/the-file");
+    else
+        ret = system("cat mount/the-file");
+
+    if (ret != 0)
+        fprintf(stderr, "[THREAD %ld] CAT ERROR: %s\n",tid, strerror(errno));
 }
 
 int main(int argc, char *argv[]) {
 
-    int thread_index, ret, params[NTHREADS];
+    int thread_index, ret;
     pthread_t *tids;
     pthread_barrier_init(&barrier, NULL, NTHREADS);
 
@@ -103,43 +125,25 @@ int main(int argc, char *argv[]) {
         return -1;      
     }
 
-    if (argc < 3) {
-        fprintf(stderr, "Utilizzo: %s <operation>\n", argv[0]);
-        return 1;
-    }
-
-    int operation = atoi(argv[1]);
-    int value = atoi(argv[2]);
-
     srand(time(NULL));
 
     for(thread_index=0; thread_index<NTHREADS; thread_index++) {
-
-        params[thread_index] = thread_index;
-        
-        switch (operation) {
+        switch (random() % 3) {
+            case 0:
+                ret = pthread_create(&tids[thread_index], NULL, put_data, &tids[thread_index]);
+                break;
             case 1:
-                ret = pthread_create(&tids[thread_index], NULL, put_data, (void*)&params[thread_index]);
+                ret = pthread_create(&tids[thread_index], NULL, get_data, &tids[thread_index]);
                 break;
             case 2:
-                if (thread_index == 0)
-                    ret = pthread_create(&tids[thread_index], NULL, get_data, (void*)&value);
+                ret = pthread_create(&tids[thread_index], NULL, invalidate_data, &tids[thread_index]);
                 break;
             case 3:
-                if (thread_index == 0)
-                    ret = pthread_create(&tids[thread_index], NULL, invalidate_data, (void*)&value);
-                break;
-            case 4:
-                value = random() % NBLOCKS;
-                if (thread_index%2)
-                    ret = pthread_create(&tids[thread_index], NULL, put_data, (void*)&params[thread_index]);
-                    // ret = pthread_create(&tids[thread_index], NULL, invalidate_data, (void*)&value);
-
-                else
-                    ret = pthread_create(&tids[thread_index], NULL, get_data, (void*)&value);
+                ret = pthread_create(&tids[thread_index], NULL, cat, &tids[thread_index]);
                 break;
             default:
-                fprintf(stderr, "ERROR: invalid operation: %d\n", operation);
+                printf("ERROR: invalid operation\n");
+                fflush(stdout);
                 pthread_barrier_destroy(&barrier);
                 return 1;
         }
